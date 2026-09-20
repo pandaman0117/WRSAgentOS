@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 
+from scripts.example_catalog import OFFLINE, WRS, check_catalog
 from wrs_agent.processes import NO_WINDOW, ROOT, python_command
 
 REPORTS = ROOT / "reports"
@@ -29,18 +30,6 @@ def main():
                 "--junitxml=reports/zenoh.xml",
             ],
         ),
-        ("first_action", ["examples/beginner/01_action.py"]),
-        ("roundtrip", ["examples/developer/01_zenoh_roundtrip.py"]),
-        ("parallel_interrupt", ["examples/developer/02_mock_interrupt.py"]),
-        ("glm_fixture", ["examples/developer/03_glm_adapter.py", "--dry-run"]),
-        ("skill_library", ["examples/beginner/02_skills.py"]),
-        ("plan_cache", ["examples/tasks/02_cache_reuse.py"]),
-        ("system_nodes", ["examples/tasks/01_parallel_and_stop.py"]),
-        ("task_handles", ["examples/tasks/05_task_handles.py"]),
-        ("errors_and_versions", ["examples/tasks/06_errors_and_versions.py"]),
-        ("voice_text", ["examples/tasks/07_voice_control.py"]),
-        ("custom_node_skill", ["examples/developer/05_custom_skill.py"]),
-        ("glm_runtime_fixture", ["examples/developer/06_glm_runtime.py"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
         (
             "doctor",
@@ -62,9 +51,16 @@ def main():
                     "--junitxml=reports/wrs.xml",
                 ],
             ),
-            ("wrs_complete", ["examples/tasks/03_wrs_scene.py"]),
-            ("wrs_cancel", ["examples/tasks/03_wrs_scene.py", "--cancel"]),
         ]
+    check_catalog(ROOT / "examples")
+    examples = dict(OFFLINE)
+    if args.wrs:
+        examples.update(WRS)
+    expectations = {}
+    for path, expected in examples.items():
+        name = "example_" + path.removesuffix(".py").replace("/", "_")
+        checks.append((name, ["examples/" + path]))
+        expectations[name] = expected
     results = []
     for name, arguments in checks:
         command = python_command(*arguments)
@@ -74,23 +70,23 @@ def main():
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=240,
+            timeout=360,
             creationflags=NO_WINDOW,
         )
         output = result.stdout + result.stderr
         evidence = REPORTS / f"{name}.txt"
         evidence.write_text(output, encoding="utf-8")
-        status = "PASS" if result.returncode == 0 else "FAIL"
+        missing = [line for line in expectations.get(name, []) if line not in output]
+        status = "PASS" if result.returncode == 0 and not missing else "FAIL"
+
         results.append(
             {
                 "test_id": name,
-                "profile": "zenoh_mock"
-                if name
-                in {"zenoh", "roundtrip", "parallel_interrupt", "skill_library", "plan_cache"}
-                else name,
+                "profile": name,
                 "status": status,
                 "command": command,
                 "exit_code": result.returncode,
+                "missing_output": missing,
                 "summary": output.strip().splitlines()[-1:] or [],
                 "evidence": str(evidence.relative_to(ROOT)),
             }

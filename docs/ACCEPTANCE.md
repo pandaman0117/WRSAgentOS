@@ -1,5 +1,7 @@
 # WRS-Agent V1 验收合同
 
+> 本文件按日期保留历史验收命令。2026-09-20 示例已全部重写，旧路径和旧参数仅供历史审计；当前运行入口见 [示例目录](../examples/README.md)，本次结果见文末“全部示例重写”。
+
 完整 V1 矩阵仍按阶段验收；最新结果见文末及 reports/cancel_summary.json；旧阶段报告为历史证据，未运行项不视为通过。报告必须区分 PASS、FAIL、SKIP、BLOCKED 与 UNVERIFIED。SKIP/BLOCKED 不算通过。
 
 ## 1. 环境层级
@@ -392,3 +394,36 @@ reports/example_paths_summary.json；Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13
 协议使用 wrs/v4 与 Envelope.schema_version=4，外部客户端和节点需一起升级，无旧端点兼容层。真实硬件、GLM、ASR/有声 TTS、UI、跨机 ACL、性能与干净机器 WRS 依赖仍为 UNVERIFIED；不作延迟或安全认证声明。DimOS 仅核对参考源码，取舍见 [节点与消息](NODES_AND_MESSAGES.md)，未引入新 Module/Stream 框架或传输依赖。
 
 下一开发入口：[开发交接](DEVELOPMENT.md) 与 examples/developer/05_custom_skill.py；分别推进 WRS、TTS、ASR、UI，任务控制统一使用 cancel/wait/start。
+
+
+## 2026-09-20：全部示例重写
+
+本次把所有示例改成独立场景，删除旧 developer 组合脚本及参数切换方式。现在有 33 个入口文件、1 个共享技能文件；最长 Python 教学文件 54 行。普通动作/任务使用直接的同步代码，常驻服务和底层通信使用单一 async main。地址、目标和配置在文件中明确给出。
+
+- 23 个可自行结束的离线示例：基础 4、任务 6、Voice 文本 4、WRS 虚拟 3、模型离线 2、传输 4。
+- 8 个配对入口：connect 的服务/客户端 2 个；nodes 的 Router/Speaker/Agent/直接调用/任务/取消 6 个。测试启动真实 Router 和独立节点，从其他工作目录运行客户端，确认客户端退出后服务继续运行，最后清理自身进程。
+- 2 个真实 GLM 入口默认关闭，只测试未经代码 opt-in 时拒绝运行；没有付费或外网模型调用。
+- `greet_skill.py` 是唯一共享合同与实现，不是另一份启动脚本。
+
+节点运行逻辑从 CLI 提取到 `wrs_agent/nodes/serve.py`，通过明确关键字参数调用；节点创建函数只接收日志路径。CLI 和 Python 示例复用同一逻辑，没有新增插件、传输、调度器或协议。Skill.arguments 仍表示技能参数合同，和已删除的示例命令行参数解析无关。
+
+实际运行：
+
+```powershell
+./scripts/run.ps1 scripts/verify.py --wrs
+./scripts/run.ps1 -m pytest -q tests/integration/test_task_identity.py::test_cancel_while_holding_keeps_effects_and_rejects_late_work --junitxml=reports/examples_interrupt.xml
+./scripts/run.ps1 -m ruff check wrs_agent tests examples scripts
+git diff --check
+```
+
+第一条完整验收：243 unit、64 Zenoh/Mock、5 WRS virtual，共 312 passed；23 份有限时长示例逐份运行，退出码和关键结果全部符合预期，Ruff / doctor 通过。`reports/acceptance.json` 共 28 项 PASS、0 FAIL；7 项未验证范围独立保留，不计入通过。
+
+最终审阅将旧中断大脚本中的组合断言迁入一条正式回归，并单独运行通过：持有 A 时取消，保持已发生的抓取效果；停止前的动作凭证被拒绝；迟到模型结果失效；新任务只执行放到 C 和验证。最终唯一测试合计 **313 passed = 243 unit + 65 Zenoh/Mock + 5 WRS virtual**，0 failures/errors/skipped。不是声称新增测试已包含在前一次完整命令中；增量证据为 `reports/examples_interrupt.xml`。新增回归后再次执行 Ruff 和 diff 检查通过。
+
+测试开发过程中，配对测试最初误查不存在的 request/agent/status，出现 1 failed / 41 passed；修正为现有 request/task/status 后两项配对测试通过，并在完整验收中再次通过。初始静态检查提示异步函数使用阻塞进程创建，已改为 asyncio subprocess；没有放宽检查规则或制造 PASS。
+
+证据保存在本地 `reports/unit.xml`、`zenoh.xml`、`wrs.xml`、`examples_interrupt.xml`、`example_*.txt`、`doctor.json`、`examples_rewrite_summary.json`。修改过的 Markdown 相对文件链接全部有效；examples 中不存在 argparse、sys.argv 或 parse_args。旧故障语义保留在正式测试，不再嵌入教学脚本。
+
+验证环境：Python 3.12.0；eclipse-zenoh / zenohd 1.9.0；Pydantic 2.13.5；pytest 9.1.1；pytest-asyncio 1.4.0；Ruff 0.16.8。WRS gitlink 仍为 `2bb014b747833c2fd9345115fbe26ffb11376f20`，submodule 无改动；WRS 探测依赖 numpy 1.26.4、scipy 1.16.2、mujoco 3.5.0、wgpu 0.32.0、websockets 15.0.1。未变更依赖或锁文件。
+
+本次软件和示例无剩余阻塞。WRS 抓放、硬件、真实 GLM、真实 ASR/音频、独立 Vision、双机保护配置和性能仍未验证；默认无录音和权重下载。context、Blueprint、动态接纳继续留待讨论。交接下一入口为 `examples/nodes/greet_skill.py`、`examples/nodes/01_start_speaker.py` 和 `docs/DEVELOPMENT.md`。沿用用户选择，只保留本地提交，不上传。

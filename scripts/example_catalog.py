@@ -1,0 +1,60 @@
+"""Every teaching file and the observable outcome checked by verify.py."""
+
+OFFLINE = {
+    "beginner/01_action.py": ["动作结果： SUCCEEDED", "当前位置： B"],
+    "beginner/02_skills.py": ["move_named_pose 版本 1", "speak 版本 1"],
+    "beginner/03_cancel_action.py": ["取消受理： True", "动作结果： CANCELLED"],
+    "beginner/04_invalid_input.py": ["错误代码： invalid_arguments"],
+    "tasks/01_sequence.py": ["任务结果： SUCCEEDED", "A 的位置： B"],
+    "tasks/02_parallel.py": ["正在执行的动作数量： 2", "任务结果： SUCCEEDED"],
+    "tasks/03_cancel.py": ["旧任务： CANCELLED", "新任务： SUCCEEDED", "旧句柄仍指向： CANCELLED"],
+    "tasks/04_watch.py": ["任务状态： RUNNING", "任务状态： SUCCEEDED"],
+    "tasks/05_goal.py": ["规划结果： DONE", "任务结果： SUCCEEDED"],
+    "tasks/06_cache.py": [
+        "第一次任务： SUCCEEDED",
+        "第二次任务： SUCCEEDED",
+        "第一次规划后，模型调用： 1",
+        "第二次规划后，模型调用： 1",
+        "缓存命中次数： 1",
+    ],
+    "voice/01_stop_task.py": ["停止受理： True", "任务结果： CANCELLED"],
+    "voice/02_stop_speech.py": ["播报结果： CANCELLED", "机器人结果： SUCCEEDED"],
+    "voice/03_query.py": ["识别意图： query", "任务结果： SUCCEEDED"],
+    "voice/04_text_goal.py": ["规划结果： DONE", "任务结果： SUCCEEDED"],
+    "models/01_plan_offline.py": ["规划决定： execute", "pick", "place", "verify"],
+    "models/02_execute_offline.py": ["规划结果： DONE", "任务结果： SUCCEEDED", "A 的位置： B"],
+    "transport/01_query.py": ["节点： wrs", "当前位置： home"],
+    "transport/02_events.py": ["收到事件：", "动作结果： SUCCEEDED"],
+    "transport/03_submit.py": ["动作编号：", "动作结果： SUCCEEDED"],
+    "transport/04_timeout.py": ["查询超时，没有取消任何动作。", "仍可查询机器人： home"],
+}
+WRS = {
+    "wrs/01_move.py": ["动作结果： SUCCEEDED", "关节角：", "末端位置："],
+    "wrs/02_cancel.py": ["动作结果： CANCELLED", "停止已确认： True"],
+    "wrs/03_new_action_after_cancel.py": [
+        "旧动作： CANCELLED",
+        "允许新动作： True",
+        "新动作： SUCCEEDED",
+    ],
+}
+# Real service/client groups are exercised together in test_developer_examples.py.
+PAIRED = {
+    "connect/01_start_system.py",
+    "connect/02_client.py",
+    "nodes/00_start_router.py",
+    "nodes/01_start_speaker.py",
+    "nodes/02_start_agent.py",
+    "nodes/03_call_skill.py",
+    "nodes/04_task.py",
+    "nodes/05_cancel.py",
+}
+# Unit tests verify refusal with the default code switch. Live calls stay unverified.
+LIVE = {"models/03_plan_live.py", "models/04_execute_live.py"}
+SUPPORT = {"nodes/greet_skill.py"}
+
+
+def check_catalog(root):
+    actual = {str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.py")}
+    expected = set(OFFLINE) | set(WRS) | PAIRED | LIVE | SUPPORT
+    if actual != expected:
+        raise ValueError(f"Example catalog mismatch: {actual ^ expected}")

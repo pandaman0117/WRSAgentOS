@@ -1,11 +1,11 @@
 """Task replacement and delayed messages over real cross-process Zenoh."""
 
 import pytest
-from conftest import eventually
+from conftest import eventually, submit_request
 
 from wrs_agent import System, step
 from wrs_agent.processes import LocalStack
-from wrs_agent.schemas import Plan, new_id
+from wrs_agent.schemas import ActionRequest, Plan, new_id
 from wrs_agent.transport import RemoteError
 
 pytestmark = pytest.mark.zenoh
@@ -61,3 +61,45 @@ async def test_late_planner_reply_cannot_replace_new_task():
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"
         ] == 1
+
+
+async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
+    """Regression formerly hidden in the multi-scenario interrupt example."""
+    async with LocalStack(deferred=True, duration=0.8) as stack:
+        system = stack.system
+        robot = system.clients["wrs"]
+        pick = step("pick", object="A")
+        old = await system.start(pick, step("place", object="A", target="B", after=pick))
+        before = await eventually(
+            robot.context, lambda s: s.data.held_object == "A" and s.active_action is not None
+        )
+        planning = await system.goal("put A in B")
+        await eventually(system.status, lambda s: s["planning"] == "WAITING")
+        assert (await old.cancel()).accepted
+        assert (await old.wait()).state == "CANCELLED"
+        stopped = await robot.snapshot()
+        assert stopped.stop_confirmed and stopped.data.held_object == "A"
+
+        late = ActionRequest(
+            action_id=new_id(),
+            task_id=old.id,
+            task_revision=0,
+            boot_id=before.boot_id,
+            control_epoch=before.control_epoch,
+            lease_id=before.lease_id,
+            state_version=before.state_version,
+            skill="place",
+            args={"object": "A", "target": "B"},
+        )
+        assert (await submit_request(robot, late)).reason == "stale_epoch"
+        await system.agent.request("request/test/planner/release", {}, control=True)
+        assert (await planning.wait()).state == "STALE"
+
+        # A is already held: the independent new plan must not pick it again.
+        place = step("place", object="A", target="C")
+        new = await system.start(place, step("verify", object="A", target="C", after=place))
+        assert (await new.wait()).state == "SUCCEEDED"
+        assert new.id != old.id and (await old.status()).state == "CANCELLED"
+        final = await robot.snapshot()
+        assert final.data.objects["A"] == "C" and final.data.held_object is None
+        assert (await robot.transport.request("request/health", {}))["executions"] == 4

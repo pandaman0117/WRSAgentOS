@@ -21,7 +21,7 @@ with launch() as system:
         print(result.state, result.error.code, result.error.action_id)
 ```
 
-完整可运行示例：`./scripts/run.ps1 examples/tasks/06_errors_and_versions.py`。
+参数错误示例：`./scripts/run.ps1 examples/beginner/04_invalid_input.py`；合同版本查询见 `examples/beginner/02_skills.py`。
 同步和异步 API 使用同一错误类型。`RemoteError` 和 `AgentError` 共享 `ErrorInfo`，后者仍继承 `ValueError`。
 
 | 字段 | 含义 |

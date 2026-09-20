@@ -1,4 +1,3 @@
-# Explicit deployment for the local example. No network code or automatic skill loading.
 [nodes.speaker]
 type = "tts"
 suffix = "-speaker"
@@ -12,5 +11,4 @@ actions = false
 enabled = true
 
 [skills]
-speak = "speaker"
 greet = "speaker"

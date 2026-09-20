@@ -22,7 +22,7 @@ V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Modul
 - Voice 已是独立节点，当前接收已识别文本并分类。ASR 后端接入示例见 [文本合同](VOICE_INPUT.md)；当前还没有真实识别引擎。
 - Agent 也是独立节点，包含 Runtime 和 Planner。Planner 先作为可替换的内部接口；只有独立 GPU、故障隔离或部署需求出现时再拆进程。
 
-可运行入口是 [自定义节点与 Skill](../examples/developer/05_custom_skill.py)。新增后端主要修改处理函数和节点创建信息；新增受支持角色的实例主要修改配置与启动入口，Runtime 不增加对应分支。V1 不自动加载网络发现的代码。
+可运行入口是 [自定义节点与 Skill](../examples/README.md#nodes)。新增后端主要修改处理函数和节点创建信息；新增受支持角色的实例主要修改配置与启动入口，Runtime 不增加对应分支。V1 不自动加载网络发现的代码。
 
 DimOS 的 [Module 文档](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/modules.md) 展示了输入、输出、RPC 和生命周期声明。借鉴这些边界即可；本项目目前不需要同样的继承与自动装配方式。
 

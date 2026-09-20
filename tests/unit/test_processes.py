@@ -79,11 +79,11 @@ async def test_cli_rejects_unsafe_configuration_before_starting(monkeypatch, arg
 
     from wrs_agent import __main__ as cli
 
-    async def must_not_start(args):
+    async def must_not_start(**kwargs):
         pytest.fail("Invalid command must not start a node or contact a model")
 
     monkeypatch.setattr(sys, "argv", ["wrs_agent", *arguments])
-    monkeypatch.setattr(cli, "run_node", must_not_start)
+    monkeypatch.setattr(cli, "serve_node", must_not_start)
     with pytest.raises(SystemExit) as error:
         await cli.main()
     assert error.value.code == 2
@@ -150,3 +150,46 @@ def test_local_namespace_rejected_before_creating_files_or_processes(env_id):
 
     with pytest.raises(ValueError, match="invalid_namespace"):
         LocalStack(env_id=env_id)
+
+
+@pytest.mark.parametrize(
+    "role, options, reason",
+    [
+        ("unknown", {}, "unsupported_node_role"),
+        ("agent", {"action_factory": lambda journal: None}, "action_factory_requires"),
+        ("wrs", {"backend": "hardware"}, "unsupported_backend"),
+        ("wrs", {"duration": 0}, "invalid_duration"),
+        ("agent", {"model_provider": "glm"}, "missing_live_opt_in"),
+        (
+            "agent",
+            {"model_provider": "glm", "live_model": True, "deferred_planner": True},
+            "invalid_model_provider",
+        ),
+    ],
+)
+async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role, options, reason):
+    from wrs_agent.nodes.serve import serve_node
+
+    def unexpected(*args):
+        pytest.fail("Invalid configuration must not acquire a lock or open a transport")
+
+    monkeypatch.setattr("wrs_agent.nodes.serve.InstanceLock", unexpected)
+    monkeypatch.setattr("wrs_agent.nodes.serve.Transport", unexpected)
+    with pytest.raises(ValueError, match=reason):
+        await serve_node(role, **options)
+
+
+@pytest.mark.parametrize("filename", ["03_plan_live.py", "04_execute_live.py"])
+async def test_live_model_examples_require_code_opt_in(monkeypatch, filename):
+    import runpy
+
+    from wrs_agent.processes import ROOT
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Default live example must not create a model or launch nodes")
+
+    monkeypatch.setattr("wrs_agent.planner.providers.glm.GLMClient", unexpected)
+    monkeypatch.setattr("wrs_agent.processes.LocalStack", unexpected)
+    entry = runpy.run_path(str(ROOT / "examples/models" / filename))
+    with pytest.raises(SystemExit, match="ALLOW_LIVE_MODEL"):
+        await entry["main"]()

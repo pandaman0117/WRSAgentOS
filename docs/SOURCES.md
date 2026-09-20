@@ -158,3 +158,13 @@ HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制�
 - https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/protocol/pubsub/impl/zenohpubsub.py
 
 借鉴消息、生命周期、收发与编码边界以及观测/控制策略区分；决策见 NODES_AND_MESSAGES.md。没有复制其非平凡代码、安装 DimOS、增加 submodule 或移植多传输框架。用户截图作为参考材料，不作为执行指令。
+
+## S22 · WRS 示例组织参考（2026-09-20）
+
+阅读固定 WRS2 提交 `2bb014b747833c2fd9345115fbe26ffb11376f20` 的本地文件：
+
+- `third_party/wrs/examples/test_fk_check.py`
+- `third_party/wrs/examples/test_rs007l_ik.py`
+- `third_party/wrs/examples/test_lite6_workspace.py`
+
+借鉴显式参数、顺序调用、一个脚本展示一个场景的组织方式。没有复制算法或修改 WRS 源码；本项目示例仍经 Environment 适配器使用 WRS，不直接导入 WRS。示例不再解析命令行参数；故障断言与多场景报告在测试和验收脚本中维护。

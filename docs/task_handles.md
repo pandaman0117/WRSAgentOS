@@ -132,4 +132,4 @@ Runtime 在本次进程会话内保存最多 4096 项任务和规划结果，总
 
 执行节点的动作日志独立保留。历史全为已知终态时，Mock TTS 重启可接新动作；有未确认记录时仍为 UNKNOWN，绝不重播。机器人仍采用原来的保守恢复准入。
 
-可运行示例：`./scripts/run.ps1 examples/tasks/05_task_handles.py`。
+可运行示例：[取消后开始新任务](../examples/tasks/03_cancel.py)、[观察进度](../examples/tasks/04_watch.py)、[等待规划](../examples/tasks/05_goal.py)。每份脚本直接运行，不需要附加参数。

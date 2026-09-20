@@ -15,7 +15,9 @@ pytestmark = pytest.mark.zenoh
 
 def test_tts_only_launch_and_another_program_connects(monkeypatch):
     monkeypatch.setenv("WRS_AGENT_TOKEN", secrets.token_urlsafe(32))
-    with launch(bindings="configs/tts.toml", duration=0.1) as system:
+    with launch(
+        bindings="configs/tts.toml", duration=0.1, port=7447, env_id="connect-demo"
+    ) as system:
         processes = system._system._local_stack.processes
         assert len(processes) == 2  # Router and TTS; no Agent, robot, or Voice required.
         assert set(system.nodes()) == {"tts"}
@@ -26,21 +28,16 @@ def test_tts_only_launch_and_another_program_connects(monkeypatch):
         with pytest.raises(ValueError, match="robot_allow_actions_unsupported"):
             system.allow_actions("tts")
         result = subprocess.run(
-            python_command(
-                "examples/tasks/04_connect.py",
-                "--endpoint",
-                system.endpoint,
-                "--env-id",
-                system.env_id,
-            ),
+            python_command("examples/connect/02_client.py"),
             cwd=ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=15,
             creationflags=NO_WINDOW,
         )
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "SUCCEEDED"
+        assert "SUCCEEDED" in result.stdout
         assert all(p.poll() is None for p in processes)
         assert system.snapshot("tts").boot_id == boot
         assert system.snapshot("tts").data.completed == 1

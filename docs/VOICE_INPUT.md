@@ -15,10 +15,10 @@ with launch() as system:
             print(planned.task.wait().state)
 ```
 
-完整的执行中取消、确认结束、再提交演示：
+执行中停止并等待结束的独立示例：
 
 ```powershell
-./scripts/run.ps1 examples/tasks/07_voice_control.py
+./scripts/run.ps1 examples/voice/01_stop_task.py
 ```
 
 已有服务时使用 `connect()`；异步程序使用 `System.connect()` 和 `await system.send_text(...)`。客户端与服务共享 `WRS_AGENT_TOKEN`，默认只有受信本机入口。confidence 或文本里的角色说明不授予权限。

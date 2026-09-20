@@ -41,4 +41,4 @@ Planner 只提出计划，Runtime 和执行节点仍检查原有结构化契约�
 格式参考：https://agentskills.io/specification 。本地参考来源和已知限制见
 项目根目录的 `docs/api_simplification.md`；没有复制 HoloAgent 的控制脚本。
 
-自定义技能与独立节点的完整例子见 [开发交接](../../docs/DEVELOPMENT.md)：共享参数合同、静态注册、TOML 绑定、Runtime 调度及取消；运行 `./scripts/run.ps1 examples/developer/05_custom_skill.py`。
+自定义技能与独立节点的完整例子见 [开发交接](../../docs/DEVELOPMENT.md)：共享参数合同、静态注册、TOML 绑定、Runtime 调度及取消；先按 [节点示例](../../examples/README.md#nodes) 分别启动节点，再运行 `examples/nodes/03_call_skill.py`。

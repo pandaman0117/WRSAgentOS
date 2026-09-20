@@ -1,5 +1,7 @@
 # WRS 与环境审计（2026-09-17）
 
+> 下文保留历史验收命令；2026-09-20 起当前 WRS 示例分别为 [虚拟运动](../examples/wrs/01_move.py)、[取消](../examples/wrs/02_cancel.py)、[取消后新动作](../examples/wrs/03_new_action_after_cancel.py)，均不附加命令行参数。最新结果见 [验收记录](ACCEPTANCE.md)。
+
 解释器：`D:\code\venv312\.venv\Scripts\python.exe`，Python 3.12.0，Windows 11。core 经 scripts/run.ps1 使用项目独立依赖；WRS 探测子进程使用同一解释器及用户已有科学依赖，未安装/升级共享环境。
 
 唯一远程：`https://github.com/chenhaox/WRS2.git`。固定 commit：

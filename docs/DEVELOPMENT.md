@@ -29,63 +29,58 @@ Voice 和 Agent 已是独立 Zenoh 节点；Planner 是 Agent 内部可替换接
 
 ```powershell
 ./scripts/run.ps1 examples/beginner/01_action.py
-./scripts/run.ps1 examples/tasks/05_task_handles.py
-./scripts/run.ps1 examples/tasks/07_voice_control.py
-./scripts/run.ps1 examples/developer/05_custom_skill.py
-./scripts/run.ps1 examples/developer/06_glm_runtime.py
-./scripts/run.ps1 examples/tasks/03_wrs_scene.py
-./scripts/run.ps1 examples/tasks/03_wrs_scene.py --cancel
+./scripts/run.ps1 examples/tasks/03_cancel.py
+./scripts/run.ps1 examples/voice/01_stop_task.py
+./scripts/run.ps1 examples/models/02_execute_offline.py
+./scripts/run.ps1 examples/wrs/01_move.py
+./scripts/run.ps1 examples/wrs/02_cancel.py
 ```
 
-前三项理解动作、任务和停止；第四项接入自定义节点与技能；第五项跑通模型适配到独立执行节点；最后两项需要已准备的 WRS 科学依赖。所有命令默认不访问付费模型、不启用硬件、不下载语音权重。WRS 依赖在干净机器的完整重建仍待验证。
+前三项理解动作、任务和停止；第四项跑通模型适配到独立执行节点；最后两项需要已准备的 WRS 科学依赖。自定义节点的分终端启动步骤见下节。所有命令默认不访问付费模型、不启用硬件、不下载语音权重。WRS 依赖在干净机器的完整重建仍待验证。
 
 ## 建议拆给四位开发者的任务
 
 | 分工 | 从哪里接手 | 第一项可验收交付 | 保留的边界 |
 |---|---|---|---|
-| WRS | `wrs_agent/env/wrs.py`、`examples/tasks/03_wrs_scene.py`、[WRS 审计](WRS_AUDIT.md) | 补一项有明确前置条件和结果验证的虚拟机器人能力，独立节点可查询、取消 | WRS 导入只在适配模块；不能把同步运动塞进控制循环 |
-| TTS | `examples/developer/custom_speech.py`、`wrs_agent/nodes/tts.py` | 将 console 后端换成本地播音，实现 speak、进度、按 action_id 取消、停止确认 | 不依赖 WRS，不另建动作协议；真实播放停止后才能报告停止 |
-| ASR | [识别文本合同](VOICE_INPUT.md)、`examples/tasks/07_voice_control.py` | 识别后的完整文本进入 send_text；部分识别不派发；明确停止不等模型 | 采集/识别独立运行；不把 VAD 当停止；不自动下载权重 |
+| WRS | `wrs_agent/env/wrs.py`、`examples/wrs/01_move.py`、[WRS 审计](WRS_AUDIT.md) | 补一项有明确前置条件和结果验证的虚拟机器人能力，独立节点可查询、取消 | WRS 导入只在适配模块；不能把同步运动塞进控制循环 |
+| TTS | `examples/nodes/greet_skill.py`、`wrs_agent/nodes/tts.py` | 参考 greet 的取消处理，复用已有 speak 合同实现本地播音、进度和停止确认 | 不依赖 WRS，不另建动作协议；真实播放停止后才能报告停止 |
+| ASR | [识别文本合同](VOICE_INPUT.md)、`examples/voice/01_stop_task.py` | 识别后的完整文本进入 send_text；部分识别不派发；明确停止不等模型 | 采集/识别独立运行；不把 VAD 当停止；不自动下载权重 |
 | UI | `wrs_agent/system.py`、[任务句柄](task_handles.md)、[错误合同](errors_and_versions.md) | 节点列表、文本输入、任务进度、取消、确认结束后创建新任务、UNKNOWN 展示 | 使用稳定 task_id；关闭观察不停止执行；状态与受理结果分开展示 |
 
 每项提交包含实现、一条可运行示例、正常完成/取消/故障证据。先用 Mock 把接口联调，再接各自真实依赖。不要同时修改协议、Runtime 调度和后端；如果现有合同无法表达能力，先提出具体缺失字段与行为。
 
 ## Node 与 Skill 的完整例子
 
-例子中 `speaker` 是一个 TTS 角色的节点实例，提供现有 speak@1 和新增 greet@1。它逐字打印到控制台，用于演示可取消的后端，不会发出声音。
+例子中 `speaker` 是一个 TTS 角色的节点实例，仅提供新增 greet@1。它逐字打印到控制台，演示可取消的后端，不播放声音。
 
 | 文件 | 职责 |
 |---|---|
-| `examples/developer/custom_speech.py` | 唯一 GreetArgs/Skill 合同、greet/console_speak 实现、create_node |
-| `examples/developer/custom_speech.toml` | 实例名 speaker、传输 suffix、enabled、技能绑定 |
-| `examples/developer/04_custom_node.py` | 静态导入合同，启动 TTS 或使用同一合同的 Agent |
-| `examples/developer/05_custom_skill.py` | 启动独立进程、参数校验、直接动作、Runtime 任务、取消及清理 |
+| `examples/nodes/greet_skill.py` | GreetArgs/Skill 合同、处理函数、显式注册 |
+| `examples/nodes/bindings.toml` | speaker / agent 实例、传输 suffix、技能绑定 |
+| `examples/nodes/00_start_router.py` | 独立 Router |
+| `examples/nodes/01_start_speaker.py` | 创建 ActionExecutor，启动技能执行节点 |
+| `examples/nodes/02_start_agent.py` | 导入同一合同，启动 Agent |
+| `examples/nodes/03_call_skill.py` | 一次直接动作 |
+| `examples/nodes/04_task.py` | Runtime 调度一次任务 |
+| `examples/nodes/05_cancel.py` | 取消正在执行的动作 |
+
+先按 [节点示例步骤](../examples/README.md#nodes) 在不同终端运行。端口为 7448，env_id 为 node-demo，各进程使用环境变量中相同的 WRS_AGENT_TOKEN。配置直接写在文件里，不靠命令行参数选择启动或调用模式。
 
 添加技能的步骤：
 
-1. 用 Pydantic 定义参数模型，由它生成参数 Schema；声明资源、所需能力和验证方式。
-2. 写普通异步处理函数 `handler(state, args, stop, progress)`，在后端允许的边界响应 stop；按实际结果更新状态。技能不导入模型 SDK 或 Zenoh。
-3. 节点 factory 创建现有 ActionExecutor，将技能与后端交给它；沿用注册、快照、context、幂等、日志和控制服务。
-4. 客户端、Agent 和动作节点在读取配置前显式导入同一技能合同。例子调用 `install_contract()`；只有节点导入不够，因为客户端与 Planner/Runtime 也需要校验参数。
-5. 在 TOML 增加明确绑定；运行直接调用、任务调度和取消的回归。Runtime 不需要为 greet 新增分支。
+1. 定义一份 Pydantic 参数模型，由它生成 Schema；声明资源、能力要求和验证方式。
+2. 写 `handler(state, options, stop, progress)`，在后端支持的边界响应 stop，按实际结果更新状态；不导入模型 SDK 或 Zenoh。
+3. 节点创建函数返回现有 ActionExecutor；复用它的消息校验、幂等、日志、查询与控制服务。
+4. 客户端、Agent 和执行节点在读取配置前调用 `register_greet()`，显式注册同一合同。
+5. TOML 明确绑定 greet 到 speaker，分别运行直接调用、任务和取消脚本。
 
-`main(action_factory=...)` 接受本地 Python 回调，只能用于显式 wrs/tts 节点；不从配置解析任意类名，不从网络安装代码。示例里的 DemoStack 只是选择已审查的启动脚本，并不是新插件框架。仅替换 speak 后端时复用现有 SpeakArgs/SkillSpec，不复制另一套合同。
+Python 入口为 `await serve_node("tts", node_id="speaker", ..., action_factory=create_speaker)`；创建函数只接收日志路径，不依赖 argparse.Namespace。CLI 也调用同一运行入口。这里只接受本地代码中的明确回调，不根据配置或网络内容加载任意类。Runtime 不为 greet 增加分支。
 
-需要独立启动和连接时，在两个终端设置相同的 `WRS_AGENT_TOKEN`（16–128 字符），然后分别执行：
-
-```powershell
-# 终端 A：持续运行 router、speaker 与 Agent
-./scripts/run.ps1 examples/developer/05_custom_skill.py --serve
-
-# 终端 B：连接并运行示例；退出后服务继续运行
-./scripts/run.ps1 examples/developer/05_custom_skill.py --connect
-```
-
-默认使用 `tcp/127.0.0.1:7447`、env_id=custom-demo；可在两端显式指定相同的 `--port` 与 `--env-id`。不设置共享 token 时，启动端生成的临时 token 只供自己的子进程使用。例子测试入口：`tests/integration/test_developer_examples.py`。
+若只替换 speak 后端，复用既有 SpeakArgs/SkillSpec，只替换处理实现；无需复制参数合同或新建 greet。样例取消的边界是控制台字符间隔，真实播音必须提供真实输出停止确认。进程联调回归在 `tests/integration/test_developer_examples.py`，包含从其他工作目录启动与客户端退出后服务保持运行。
 
 ## WRS：先接虚拟能力
 
-现有 WRS Node 已把固定版本 Lite6 接到公共动作协议。`03_wrs_scene.py` 展示直接动作的 ACCEPTED、进度、查询、取消，以及 Runtime 的命名姿态任务。同步 FK 在所属工作线程运行；控制先撤销旧权限，等在途调用返回后再确认停止。
+现有 WRS Node 已把固定版本 Lite6 接到公共动作协议。`examples/wrs/01_move.py` 展示运动和结果查询，`02_cancel.py` 展示取消，`03_new_action_after_cancel.py` 展示确认取消后接收新动作。同步 FK 在所属工作线程运行；控制先撤销旧权限，等在途调用返回后再确认停止。
 
 当前真实 WRS profile 仅支持 observe / move_named_pose，支持 home/B/C 命名姿态。pick/place/物体 verify 和碰撞规划仍明确 unsupported；Mock 的抓取成功不能作为真实 WRS 能力证明。下一步可在适配器内加入已验证的夹爪、目标几何、碰撞与结果观测，再扩展对应技能。长时间规划宜放独立进程，设备控制保持单一所有者。
 
@@ -115,16 +110,16 @@ UI 可使用 `System.connect()` 的异步入口，使等待任务进度与用户
 
 ## GLM：完整软件路径已接好
 
-`03_glm_adapter.py --dry-run` 只展示计划，不启动动作。`06_glm_runtime.py` 默认使用 HTTP 夹具，经过 GLMClient → ModelPlanner → Runtime → 真实 Zenoh → 独立 Mock WRS/TTS，执行并检查结果。它演示嵌入式 Runtime，因此动作配置 `configs/actions.toml` 不再额外启动一个 Agent。
+四份独立文件按职责拆开：
 
-真实服务使用进程环境中的 GLM_API_KEY、GLM_MODEL、GLM_BASE_URL，模型和端点应按实际可用服务设置；`.env.example` 仅说明变量，不自动读取。本轮没有发送真实模型请求。先验收仅规划调用，再显式开启端到端例子：
+- `examples/models/01_plan_offline.py`：HTTP 固定样本解析为计划，不启动节点。
+- `examples/models/02_execute_offline.py`：同样的样本经过 GLMClient → ModelPlanner → Runtime → Zenoh → 独立 Mock 节点。当前脚本拥有 Runtime，动作配置不再启动另一个 Agent。
+- `examples/models/03_plan_live.py`：真实模型只规划。
+- `examples/models/04_execute_live.py`：真实模型规划后，独立 Mock 节点执行。
 
-```powershell
-./scripts/run.ps1 examples/developer/03_glm_adapter.py --live-model --dry-run
-./scripts/run.ps1 examples/developer/06_glm_runtime.py --live-model --goal "put A in B"
-```
+后两份文件的 `ALLOW_LIVE_MODEL = False` 默认拒绝运行。确认服务使用权限和费用后，配置环境变量 GLM_API_KEY、GLM_MODEL、GLM_BASE_URL，手动改代码开关和 GOAL；先单独验收仅规划，再验收执行。`.env.example` 不自动读取，凭据不能写进代码。本轮没有真实调用。
 
-常驻 Agent 也可通过 `-m wrs_agent launch --model-provider glm --live-model` 使用同一适配器。GLM 失败会保留结构化规划错误，如 glm_http_401；不会换成 Mock 成功。停止不等模型返回，迟到结果失效。当前只支持非流式单工具提案，尚无流式输出或 GLM TTS。
+常驻 Agent 的已有 CLI 仍支持 `-m wrs_agent launch --model-provider glm --live-model`。GLM 失败保留结构化错误，不换成 Mock 成功；明确停止不等模型返回，迟到结果失效。目前只有非流式单工具提案，没有流式输出或 GLM TTS。
 
 ## 合并验收与后续范围
 
@@ -133,6 +128,6 @@ UI 可使用 `System.connect()` 的异步入口，使等待任务进度与用户
 ./scripts/run.ps1 scripts/verify.py --wrs
 ```
 
-后者增加 WRS 虚拟节点测试和完成/取消示例。真实命令、测试数量及限制见 [ACCEPTANCE.md](ACCEPTANCE.md)；机器报告生成在本地 reports/。本地 EXECPLAN 按仓库规则不上传，本文件是可提交的开发路线与交接合同。
+后者增加 WRS 虚拟节点测试和三份 WRS 示例。全部教学文件由 scripts/example_catalog.py 登记；有限时长脚本检查实际输出，常驻节点和独立客户端按组验证。真实命令、测试数量及限制见 [ACCEPTANCE.md](ACCEPTANCE.md)；机器报告生成在本地 reports/。本地 EXECPLAN 按仓库规则不上传，本文件是可提交的开发路线与交接合同。
 
 当前优先补真实 ASR、本地可停止 TTS、WRS 虚拟抓放场景和 UI。动态接纳、context 重构、多设备所有权协调、跨机认证/ACL、持久任务恢复、性能基准分别立项；不作为这些后端开始开发的前置条件。真实硬件、真实音频质量、GLM 账号服务和干净机器 WRS 环境仍需单独验收。

@@ -1,0 +1,31 @@
+"""终端一：启动本组示例的 Zenoh router，Ctrl+C 关闭。"""
+
+import asyncio
+from pathlib import Path
+
+from wrs_agent.processes import NO_WINDOW, ROUTER, check_router_version
+
+CONFIG = Path(__file__).with_name("router.json5")
+
+
+async def main():
+    await asyncio.to_thread(check_router_version)
+    router = await asyncio.create_subprocess_exec(
+        str(ROUTER), "-c", str(CONFIG), creationflags=NO_WINDOW
+    )
+    try:
+        print("Router 地址：tcp/127.0.0.1:7448；请继续运行 01_start_speaker.py。", flush=True)
+        exit_code = await router.wait()
+        if exit_code:
+            raise SystemExit(exit_code)
+    finally:
+        if router.returncode is None:
+            router.terminate()
+        await asyncio.wait_for(router.wait(), timeout=5)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Router 已关闭。")

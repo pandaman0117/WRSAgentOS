@@ -1,96 +1,135 @@
-# 示例学习顺序
+# 示例：一份脚本，一件事
 
-想先弄清基础概念和每个例子背后的设计，可以先读 [从一个动作开始，读懂 WRS-Agent](../docs/getting_started.md)，再按下面的顺序运行。
+每份脚本直接写出配置、调用和结果；没有命令行参数，也没有运行模式开关。修改目标、文本或地址时，直接改代码。先读最简单的一份，再按需要看其他文件。
 
-从 beginner 开始，不需要先学 asyncio、Zenoh 消息或模型 SDK。下面命令在仓库根目录运行；指定 Python 和本地依赖的安装方式见主 README。
-
-示例使用的仓库配置按脚本位置定位，IDE 的工作目录可以设为示例所在目录；IDE 仍需将仓库根目录加入 Python 导入路径。普通终端使用 scripts/run.ps1 加载项目和锁定依赖。API 或 CLI 显式传入的相对配置路径仍以调用者的工作目录为基准。
-
-| 顺序 | 示例 | 学会什么 | 写法 / 条件 |
-|---|---|---|---|
-| 1 入门 | [beginner/01_action.py](beginner/01_action.py) | 调用一次动作、查询、等待结果 | 同步，Mock |
-| 2 入门 | [beginner/02_skills.py](beginner/02_skills.py) | 查看当前有哪些技能 | 同步，Mock |
-| 3 任务 | [tasks/01_parallel_and_stop.py](tasks/01_parallel_and_stop.py) | 多步任务、并行、查询和分别停止 | 同步，Mock + 语音事件回放 |
-| 4 任务 | [tasks/02_cache_reuse.py](tasks/02_cache_reuse.py) | 重复目标复用计划，条件变化拒绝复用 | 同步，脚本化 Mock 模型 |
-| 5 虚拟机器人 | [tasks/03_wrs_scene.py](tasks/03_wrs_scene.py) | 同一套 API 操作真实 WRS 虚拟模型 | 同步，需要 WRS 依赖 |
-| 6 连接已有节点 | [tasks/04_connect.py](tasks/04_connect.py) | 启动和使用分开；退出客户端不关闭节点 | 同步，需要先启动 TTS |
-| 7 任务句柄 | [tasks/05_task_handles.py](tasks/05_task_handles.py) | 按 ID 查询、显式停止取消后创建新任务、区分规划和执行 | 同步，Mock |
-| 8 错误处理 | [tasks/06_errors_and_versions.py](tasks/06_errors_and_versions.py) | 查询合同版本、读取任务错误和动作拒绝原因 | 同步，Mock |
-| 9 核心开发 | [developer/01_zenoh_roundtrip.py](developer/01_zenoh_roundtrip.py) | LocalStack 启动了什么；程序怎样问答、收通知 | async，真实 Zenoh，逐步中文输出 |
-| 10 核心开发 | [developer/02_mock_interrupt.py](developer/02_mock_interrupt.py) | 挂起模型、拒绝旧命令、持物停止、取消后创建新任务任务 | async，故障验证 |
-| 11 模型接入 | [developer/03_glm_adapter.py](developer/03_glm_adapter.py) | 查看 GLM 原生响应怎样变成计划 | async，默认离线 HTTP 夹具 |
-| 12 语音控制 | [tasks/07_voice_control.py](tasks/07_voice_control.py) | 识别文本、任务停止、显式取消后创建新任务、规划结果 | 同步，文本输入，不使用麦克风 |
-| 13 节点和技能开发 | [developer/05_custom_skill.py](developer/05_custom_skill.py) | 独立自定义 TTS 进程、共享 greet 合同、Runtime 调度和取消 | async，真实 Zenoh，控制台输出 |
-| 14 GLM 完整链路 | [developer/06_glm_runtime.py](developer/06_glm_runtime.py) | GLM 原生回复经过 Runtime 执行与验证 | async，默认离线 HTTP 夹具 + Mock 节点 |
-
-
-先运行：
+从仓库根目录运行：
 
 ```powershell
 ./scripts/run.ps1 examples/beginner/01_action.py
-./scripts/run.ps1 examples/beginner/02_skills.py
-./scripts/run.ps1 examples/tasks/01_parallel_and_stop.py
-./scripts/run.ps1 examples/tasks/02_cache_reuse.py
-./scripts/run.ps1 examples/tasks/05_task_handles.py
-./scripts/run.ps1 examples/tasks/06_errors_and_versions.py
 ```
 
-调用 `action()` 后节点开始独立执行，脚本可以接着做别的事；`wait()` 才等待终态。先提交多个动作、之后分别等待，就能让不同节点并行。`cancel()` 返回取消受理结果，`wait()` 确认动作终态；等待超时不等于已经停止。
+`run.ps1` 只负责使用项目指定的 Python 和依赖。示例文件名后不需要附加参数。新机器先完成 [依赖准备](../docs/DEPENDENCIES.md)。普通例子使用同步 API；常驻服务和底层通信使用 async。
 
-`start()` 返回固定任务 ID 的句柄，用 `task.wait()` 等待；`goal().wait()` 等规划结果，再等待其 task。`system.status()` 只保留总览。
+## 基础动作
 
-Task 是一次确定计划的执行；Skill 是能力名称，Action 是这次能力调用。只做一次动作时不用组装 Task、Planner 或客户端。前三个 developer 示例的执行顺序、运行命令和输出解读见 [导读第 9 节](../docs/getting_started.md#developer-examples)。其中的 async 用来明确等待网络和控制路径，不是入门前提。
+| 文件 | 只展示什么 | 预期结果 |
+|---|---|---|
+| [01_action.py](beginner/01_action.py) | 提交动作并等待 | SUCCEEDED，姿态 B |
+| [02_skills.py](beginner/02_skills.py) | 查看可用技能和合同版本 | 名称、版本、描述 |
+| [03_cancel_action.py](beginner/03_cancel_action.py) | 取消一次 Mock 播报 | CANCELLED |
+| [04_invalid_input.py](beginner/04_invalid_input.py) | 读取参数错误 | invalid_arguments |
 
-缓存演示通过独立 Agent 进程运行。默认 Mock 模型支持严格转移模板和明确的 home/回原位；其他输入返回 CLARIFY。它不理解任意自然语言，也没有调用 GLM。缓存成功节省的是 Mock 模型调用，计数为 1→1→2→3。
+## 任务
 
-所有脚本默认无付费模型调用、无真实音频、无实机。WRS 示例只是虚拟 FK 验证，pick/place 仍只在 Mock 中演示。进入目录不会运行模块，也没有新依赖或自动加载机制。
+| 文件 | 只展示什么 | 预期结果 |
+|---|---|---|
+| [01_sequence.py](tasks/01_sequence.py) | 抓取 → 放置 → 验证 | A 位于 B |
+| [02_parallel.py](tasks/02_parallel.py) | 运动与播报同时执行 | 同时出现 2 个活动动作 |
+| [03_cancel.py](tasks/03_cancel.py) | 取消结束后开始新任务 | 旧 CANCELLED，新 SUCCEEDED |
+| [04_watch.py](tasks/04_watch.py) | 观察任务进度 | 状态变化到 SUCCEEDED |
+| [05_goal.py](tasks/05_goal.py) | 等规划，再等执行 | DONE → SUCCEEDED |
+| [06_cache.py](tasks/06_cache.py) | 同样状态下复用计划 | 模型调用保持 1，命中 1 次 |
 
-原平铺 01/02 移入 developer，03/05/10 移入 tasks，09 移入 beginner，04 移入 developer。旧路径不再保留转发脚本，完整映射和接口迁移见 [API 记录](../docs/api_simplification.md)。
+`after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。这里抓取/放置是 Mock 状态变化，目标规划是确定的 Mock 模板。
 
-<a id="connect"></a>
+## 语音入口
 
-连接已有节点：两个终端先在各自环境变量中设置同一个 `WRS_AGENT_TOKEN`（16–128 字符），不要保存到代码或 TOML。
+| 文件 | 只展示什么 |
+|---|---|
+| [01_stop_task.py](voice/01_stop_task.py) | 任务运行时收到“停止” |
+| [02_stop_speech.py](voice/02_stop_speech.py) | “别说了”只停止播报，机器人继续 |
+| [03_query.py](voice/03_query.py) | “做到哪一步了”查询进度 |
+| [04_text_goal.py](voice/04_text_goal.py) | 已识别文本成为规划目标 |
 
-终端一启动服务，保持运行：
+这些例子直接传入已识别文本，不采集麦克风。ASR 或 UI 接入后调用同一个 `send_text()`。明确停止走控制路径，不等待模型。受理不等于停止完成，最终结果用任务或动作句柄查询。
+
+## WRS 虚拟机器人
+
+| 文件 | 只展示什么 |
+|---|---|
+| [01_move.py](wrs/01_move.py) | Lite6 虚拟运动到 B，读取关节和末端位置 |
+| [02_cancel.py](wrs/02_cancel.py) | 取消虚拟运动并查询停止确认 |
+| [03_new_action_after_cancel.py](wrs/03_new_action_after_cancel.py) | 确认取消后开放新动作准入，再回 home |
+
+需要已准备好的 WRS 科学依赖。使用真实 WRS 模型的无窗口 FK 运动，不连接硬件；没有验证真实抓放或碰撞规划。普通任务取消会收尾，直接机器人动作取消则需要显式 `allow_actions()`；它只允许新动作，不续跑旧动作。
+
+## connect
+
+这一组区分“拥有服务”和“连接服务”。在两个终端中配置相同的 `WRS_AGENT_TOKEN` 环境变量（16–128 字符），确保回环端口 7447 空闲。
+
+终端一运行 [01_start_system.py](connect/01_start_system.py)，保持运行：
 
 ```powershell
-./scripts/run.ps1 -m wrs_agent launch --bindings configs/tts.toml --env-id arm01
+./scripts/run.ps1 examples/connect/01_start_system.py
 ```
 
-终端二调用：
+看到“TTS 已就绪”后，终端二运行 [02_client.py](connect/02_client.py)：
 
 ```powershell
-./scripts/run.ps1 examples/tasks/04_connect.py
+./scripts/run.ps1 examples/connect/02_client.py
 ```
 
-这里仅启动本机 router + Mock TTS；没有 Agent、机器人、真实音频或模型请求。
-调用程序退出后，TTS 仍在线；可以再次运行同一例子。终端一 Ctrl+C 才清理其拥有的服务。
-节点启动后，Zenoh 会通知已连接的程序；只接受 TOML 中已配置的节点，不自动加载新 Python 技能。
-连接示例由真实子进程集成测试运行；单独运行前需按以上步骤准备服务。
+客户端完成一次播报后退出，服务继续运行。终端一按 Ctrl+C 关闭自己拥有的节点和 Router。地址、配置路径和 env_id 都直接写在两份代码中。
 
+## nodes
 
-## 给接手开发的同学
+这一组交给开发新节点与技能的同学。`speaker` 是独立 TTS 角色节点，只提供 `greet`，逐字打印问候，不播放声音。Agent 是另一个进程，使用既有 Runtime 调度。
 
-先读 [开发交接](../docs/DEVELOPMENT.md)，然后运行：
+| 文件 | 职责 |
+|---|---|
+| [greet_skill.py](nodes/greet_skill.py) | 唯一参数合同、技能描述和可取消处理函数 |
+| [bindings.toml](nodes/bindings.toml) | 节点实例与技能绑定 |
+| [router.json5](nodes/router.json5) | 本组 Router 配置，回环端口 7448 |
+| [00_start_router.py](nodes/00_start_router.py) | 终端一：Router |
+| [01_start_speaker.py](nodes/01_start_speaker.py) | 终端二：技能执行节点 |
+| [02_start_agent.py](nodes/02_start_agent.py) | 终端三：任务调度节点 |
+| [03_call_skill.py](nodes/03_call_skill.py) | 终端四：调用一次 greet |
+| [04_task.py](nodes/04_task.py) | 终端四：通过任务调用 greet |
+| [05_cancel.py](nodes/05_cancel.py) | 终端四：取消正在打印的问候 |
+
+在各终端设置相同的 `WRS_AGENT_TOKEN`，依次启动：
 
 ```powershell
-./scripts/run.ps1 examples/tasks/07_voice_control.py
-./scripts/run.ps1 examples/developer/05_custom_skill.py
-./scripts/run.ps1 examples/developer/06_glm_runtime.py
+# 终端一
+./scripts/run.ps1 examples/nodes/00_start_router.py
+# 终端二
+./scripts/run.ps1 examples/nodes/01_start_speaker.py
+# 终端三
+./scripts/run.ps1 examples/nodes/02_start_agent.py
 ```
 
-05 自动启动自己的 router、自定义 TTS 节点和 Agent，验证完清理。实现拆成
-[custom_speech.py](developer/custom_speech.py)（合同和处理函数）、
-[04_custom_node.py](developer/04_custom_node.py)（明确的本地节点入口）与
-[custom_speech.toml](developer/custom_speech.toml)（绑定）。它们取消后创建新任务既定 TTS 角色，无自动插件发现。
-
-需要手工连接时，两终端设置相同的 WRS_AGENT_TOKEN，再分别运行：
+看到两个节点的 ready 后，在终端四分别运行：
 
 ```powershell
-./scripts/run.ps1 examples/developer/05_custom_skill.py --serve
-./scripts/run.ps1 examples/developer/05_custom_skill.py --connect
+./scripts/run.ps1 examples/nodes/03_call_skill.py
+./scripts/run.ps1 examples/nodes/04_task.py
+./scripts/run.ps1 examples/nodes/05_cancel.py
 ```
 
-06 的 `--live-model` 明确授权调用已配置的真实模型，执行端仍仅为独立 Mock 节点。
-只想检查模型回复而不运行任何节点，用已有 `03_glm_adapter.py --live-model`。
-默认运行不会读取真实模型密钥或访问模型服务；不要把 HTTP 夹具当作真实 GLM 验收。
+预期依次为 SUCCEEDED、SUCCEEDED、CANCELLED。先退出 Agent 和 Speaker，最后退出 Router，均使用 Ctrl+C。技能日志保存在 `.local/state/example-speaker.sqlite3`，重启保留去重记录；不要在节点运行时删除日志。
+
+新增技能主要改合同与处理函数、节点创建信息和绑定，不需要修改 Runtime。详细边界见 [开发交接](../docs/DEVELOPMENT.md)。
+
+## 模型
+
+| 文件 | 只展示什么 | 网络调用 |
+|---|---|---|
+| [01_plan_offline.py](models/01_plan_offline.py) | GLM 响应解析为计划 | 无，固定 HTTP 样本 |
+| [02_execute_offline.py](models/02_execute_offline.py) | 计划经过 Runtime 与独立 Mock 节点执行 | 只有本机 Zenoh |
+| [03_plan_live.py](models/03_plan_live.py) | 真实 GLM 只提出计划 | 需手动开启 |
+| [04_execute_live.py](models/04_execute_live.py) | 真实 GLM 规划，Mock 节点执行 | 需手动开启 |
+
+真实模型两份文件的 `ALLOW_LIVE_MODEL` 默认是 `False`，直接运行会明确退出。确认服务使用权限和费用，配置 `GLM_API_KEY`、`GLM_MODEL`、`GLM_BASE_URL` 后，手动修改相应文件中的开关和目标。凭据只放环境变量；`.env.example` 不会自动加载。真实服务未验收，普通示例和回归测试不会调用它。
+
+离线样本固定为 A → B；修改问题文字不会让该样本自动产生新计划。
+
+## 底层通信
+
+| 文件 | 只展示什么 |
+|---|---|
+| [01_query.py](transport/01_query.py) | 向动作节点查询快照 |
+| [02_events.py](transport/02_events.py) | 订阅一条动作进度事件，再查询终态 |
+| [03_submit.py](transport/03_submit.py) | 显式获取 context，由客户端构造请求 |
+| [04_timeout.py](transport/04_timeout.py) | 查询超时后仍可继续查询 |
+
+通常只需前面的 `system.action()`；这组用于接手通信代码。事件不保证每条都被观察到，终态通过句柄查询。测试断言、故障注入和多场景汇总留在 `tests/`；`scripts/verify.py --wrs` 检查所有离线示例输出，成组服务由集成测试验证。

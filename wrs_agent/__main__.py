@@ -1,152 +1,13 @@
-"""Foreground supervision; Mock or WRS virtual capability nodes, hardware cannot be enabled."""
+"""Command-line entry; Python examples call serve_node() directly."""
 
 import argparse
 import asyncio
-import inspect
-import os
 
-from wrs_agent.bindings import load_bindings
-from wrs_agent.env.mock import make_mock_environment
-from wrs_agent.nodes.actions import ActionClient, register_actions
-from wrs_agent.nodes.agent import register_runtime
-from wrs_agent.nodes.tts import make_mock_tts
-from wrs_agent.nodes.voice import register_voice
-from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.mock import MockClient
-from wrs_agent.processes import InstanceLock, LocalStack
-from wrs_agent.registry import NodeRegistry, register_node
-from wrs_agent.runtime import Runtime
-from wrs_agent.schemas import Empty
-from wrs_agent.transport import Transport
+from wrs_agent.nodes.serve import serve_node
+from wrs_agent.processes import LocalStack
 
 
-async def run_node(args, *, action_factory=None):
-    definitions, bindings = load_bindings(args.bindings)
-    node_id = args.node_id or args.role
-    definition = definitions.get(node_id)
-    if not definition or definition["type"] != args.role or not definition["enabled"]:
-        raise ValueError("node_not_configured")
-    target = args.env_id + definition["suffix"]
-    scope = "action" if args.role in {"wrs", "tts"} else args.role
-    lock = InstanceLock(f"{args.site}-{target}-{scope}")
-    journal = args.journal or f".local/state/{args.site}-{target}.sqlite3"
-    buses = []
-    owner = None
-    model = None
-    close_voice = None
-    done = asyncio.Event()
-    try:
-
-        def connect(target_id):
-            bus = Transport(
-                args.endpoint,
-                args.site,
-                target_id,
-                os.environ.get("WRS_AGENT_TOKEN", ""),
-                args.role,
-            )
-            buses.append(bus)
-            return bus
-
-        transport = connect(target)
-        if args.role in {"wrs", "tts"}:
-            if action_factory is not None:
-                owner = action_factory(args, journal)
-                if inspect.isawaitable(owner):
-                    owner = await owner
-            elif args.role == "wrs" and args.backend == "wrs_virtual":
-                from wrs_agent.env.wrs import make_wrs_environment
-
-                owner = await make_wrs_environment(journal, duration=args.duration)
-            elif args.role == "wrs":
-                owner = make_mock_environment(journal, duration=args.duration, fault=args.fault)
-            else:
-                owner = make_mock_tts(journal, duration=args.duration)
-            register_actions(transport, owner)
-        elif args.role == "agent":
-            if args.model_provider == "glm":
-                from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
-
-                model = GLMClient(GLMConfig.from_env(), live_model=args.live_model)
-            else:
-                model = MockClient(deferred=args.deferred_planner)
-            registry = NodeRegistry(
-                {
-                    name: connect(args.env_id + d["suffix"])
-                    for name, d in definitions.items()
-                    if d["enabled"]
-                },
-                definitions,
-                bindings,
-            )
-            clients = {
-                name: ActionClient(bus, node_id=name)
-                for name, bus in registry.buses.items()
-                if definitions[name]["actions"]
-            }
-            owner = Runtime(
-                clients,
-                bindings,
-                planner=ModelPlanner(model),
-                registry=registry,
-            )
-            register_runtime(transport, owner)
-            if args.deferred_planner:
-
-                async def release(payload):
-                    Empty.model_validate(payload)
-                    model.gate.set()
-                    return {"released": True, "provider": "mock"}
-
-                transport.register_handler("request/test/planner/release", release, control=True)
-        else:
-
-            def role_bus(role):
-                matches = [d for d in definitions.values() if d["type"] == role and d["enabled"]]
-                if len(matches) != 1:
-                    raise ValueError("voice_requires_one_node_per_role")
-                return connect(args.env_id + matches[0]["suffix"])
-
-            close_voice = register_voice(
-                transport,
-                ActionClient(role_bus("wrs")),
-                ActionClient(role_bus("tts")),
-                role_bus("agent"),
-            )
-
-        info = register_node(
-            transport,
-            node_id,
-            args.role,
-            owner if args.role in {"wrs", "tts"} else None,
-        )
-
-        if args.role == "agent":
-            owner.registry.local[node_id] = info
-
-        async def shutdown(payload):
-            Empty.model_validate(payload)
-            done.set()
-            return {"stopping": True}
-
-        transport.register_handler(f"request/{args.role}/shutdown", shutdown, control=True)
-        print(f"ready {args.role} {target}", flush=True)
-        await done.wait()
-    finally:
-        try:
-            if close_voice:
-                await close_voice()
-            if owner:
-                await owner.close()
-            if model:
-                await model.aclose()
-        finally:
-            for bus in buses:
-                await bus.close()
-            lock.close()
-
-
-async def main(*, action_factory=None):
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("role", choices=["wrs", "agent", "tts", "voice", "launch"])
     parser.add_argument("--endpoint", default="tcp/127.0.0.1:7447")
@@ -177,8 +38,6 @@ async def main(*, action_factory=None):
         ],
     )
     args = parser.parse_args()
-    if action_factory is not None and args.role not in {"tts", "wrs"}:
-        parser.error("A local action_factory is only valid for an explicit wrs/tts node.")
     if args.model_provider == "glm" and (not args.live_model or args.deferred_planner):
         parser.error("GLM requires --live-model and cannot use --deferred-planner")
     if args.duration <= 0 or args.duration > 30:
@@ -200,7 +59,7 @@ async def main(*, action_factory=None):
             )
             await asyncio.Event().wait()
     else:
-        await run_node(args, action_factory=action_factory)
+        await serve_node(**vars(args))
 
 
 if __name__ == "__main__":
