@@ -6,6 +6,7 @@ import inspect
 import time
 from collections import OrderedDict
 
+from wrs_agent.errors import AgentError, error_info
 from wrs_agent.schemas import (
     ActionContext,
     ActionReceipt,
@@ -59,7 +60,7 @@ class ActionExecutor:
         self.capabilities_extra = capabilities_extra or {}
         self.backend = backend
         self.node_id = "wrs" if self.capabilities().robot_controls else "tts"
-        self.admission = "HELD" if self.records else "OPEN"
+        self.admission = "HELD" if self.records and self.capabilities().robot_controls else "OPEN"
         self.stop_confirmed = True
         if any(s.state == "UNKNOWN" for _, s in self.records.values()):
             self.admission = "UNKNOWN"
@@ -76,7 +77,7 @@ class ActionExecutor:
 
     def capabilities(self):
         return CapabilitySnapshot(
-            skills=sorted(self.skills),
+            skills={name: entry.spec.version for name, entry in sorted(self.skills.items())},
             backend=self.backend,
             **self.capabilities_extra,
             resources=sorted({r for entry in self.skills.values() for r in entry.spec.resources}),
@@ -88,7 +89,7 @@ class ActionExecutor:
             captured_at_ns=time.time_ns(),
             boot_id=self.boot_id,
             control_epoch=self.epoch,
-            world_version=self.world.version,
+            state_version=self.world.version,
             admission=self.admission,
             active_action=self.active,
             data=self.world.snapshot(),
@@ -122,6 +123,15 @@ class ActionExecutor:
             state=state,
             sequence=old.sequence + 1,
             progress=old.progress if progress is None else progress,
+            error=error_info(
+                "execution_unknown" if state == "UNKNOWN" else "action_failed",
+                node_id=self.node_id,
+                task_id=request["task_id"],
+                action_id=action_id,
+                stage="observe",
+            )
+            if state in {"FAILED", "UNKNOWN"}
+            else None,
             reason=reason,
             verification=verification,
         )
@@ -147,8 +157,8 @@ class ActionExecutor:
             return "stale_epoch"
         if self.admission != "OPEN":
             return "admission_closed"
-        if request.world_version != self.world.version:
-            return "stale_world"
+        if request.state_version != self.world.version:
+            return "stale_state"
         grant = self.leases.get(request.lease_id)
         if not grant or grant[:2] != (self.epoch, self.world.version):
             return "invalid_lease"
@@ -165,22 +175,42 @@ class ActionExecutor:
         if request.action_id in self.records:
             previous, status = self.records[request.action_id]
             if data != previous:
-                return ActionReceipt(accepted=False, reason="action_id_conflict")
+                return ActionReceipt(
+                    accepted=False,
+                    reason="action_id_conflict",
+                    error=error_info(
+                        "action_id_conflict",
+                        node_id=self.node_id,
+                        action_id=request.action_id,
+                        task_id=request.task_id,
+                        stage="submit",
+                    ),
+                )
             return ActionReceipt(accepted=True, status=status)
         reason = self._fence_reason(request)
         if not reason:
             try:
                 if request.skill not in self.skills:
-                    raise ValueError("skill_not_on_node")
+                    raise AgentError("skill_not_on_node")
                 validate_skill(request.skill, request.version, request.args, registry=self.skills)
-            except ValueError:
-                reason = "invalid_skill_or_arguments"
+            except AgentError as exc:
+                reason = exc.code
         if not reason and self.active is not None:
             reason = "resource_busy"
         if not reason and len(self.records) >= 4096:
             reason = "journal_capacity"
         if reason:
-            return ActionReceipt(accepted=False, reason=reason)
+            return ActionReceipt(
+                accepted=False,
+                reason=reason,
+                error=error_info(
+                    reason,
+                    node_id=self.node_id,
+                    task_id=request.task_id,
+                    action_id=request.action_id,
+                    stage="submit",
+                ),
+            )
         self.revisions[request.task_id] = request.task_revision
         self.active = request.action_id
         self.stop_confirmed = False
@@ -304,7 +334,18 @@ class ActionExecutor:
     async def control(self, kind, request: ControlRequest, *, authorized=True):
         def receipt(accepted, phase, reason=""):
             return ControlReceipt(
-                accepted=accepted, phase=phase, reason=reason, control_epoch=self.epoch
+                accepted=accepted,
+                phase=phase,
+                reason=reason,
+                control_epoch=self.epoch,
+                error=error_info(
+                    reason or "control_unconfirmed",
+                    node_id=self.node_id,
+                    action_id=request.action_id,
+                    stage="control",
+                )
+                if not accepted or phase == "UNKNOWN"
+                else None,
             )
 
         if not authorized:
@@ -323,7 +364,7 @@ class ActionExecutor:
                 self.admission != "HELD"
                 or not self.stop_confirmed
                 or self.active is not None
-                or request.world_version != self.world.version
+                or request.state_version != self.world.version
             ):
                 return receipt(False, "REJECTED", "resume_not_ready")
             self.epoch += 1

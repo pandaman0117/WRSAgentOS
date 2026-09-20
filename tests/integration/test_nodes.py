@@ -2,7 +2,7 @@ import asyncio
 import subprocess
 
 import pytest
-from conftest import eventually
+from conftest import eventually, submit_request
 
 from wrs_agent.processes import NO_WINDOW, ROOT, LocalStack, python_command
 from wrs_agent.schemas import ActionRequest, Plan, Step, new_id
@@ -20,7 +20,7 @@ async def make_action(client, skill, args):
         boot_id=world.boot_id,
         control_epoch=world.control_epoch,
         lease_id=world.lease_id,
-        world_version=world.world_version,
+        state_version=world.state_version,
         skill=skill,
         args=args,
     )
@@ -132,11 +132,11 @@ async def test_hung_model_direct_voice_cancel_and_stop():
             boot_id=before.boot_id,
             control_epoch=before.control_epoch,
             lease_id=before.lease_id,
-            world_version=before.world_version,
+            state_version=before.state_version,
             skill="pick",
             args={"object": "A"},
         )
-        assert (await wrs.submit(late)).reason == "stale_epoch"
+        assert (await submit_request(wrs, late)).reason == "stale_epoch"
         await bus.request("request/test/planner/release", {}, control=True)
         await eventually(
             lambda: bus.request("request/task/status", {}), lambda s: s["planning"] == "STALE"
@@ -154,18 +154,18 @@ async def test_dedup_missed_terminal_and_authentication():
             (tts, "speak", {"text": "hello"}),
         ]:
             action = await make_action(client, skill, args)
-            receipt = await client.submit(action)
+            receipt = await submit_request(client, action)
             assert receipt.accepted and receipt.status.state == "ACCEPTED"
-            assert (await client.submit(action)).accepted
+            assert (await submit_request(client, action)).accepted
             # No subscription at all: status recovers missed progress and terminal events.
             result = await eventually(
                 lambda client=client, action=action: client.status(action.action_id),
                 lambda s: s.state == "SUCCEEDED",
             )
             assert result.verification == "PASS"
-            assert (await client.submit(action)).status == result
+            assert (await submit_request(client, action)).status == result
             conflicting = action.model_copy(update={"task_revision": 1})
-            assert (await client.submit(conflicting)).reason == "action_id_conflict"
+            assert (await submit_request(client, conflicting)).reason == "action_id_conflict"
             assert (await client.transport.request("request/health", {}))["executions"] == 1
 
         # Valid name/priority never substitutes for a deployment credential.
@@ -178,9 +178,9 @@ async def test_dedup_missed_terminal_and_authentication():
         finally:
             await forged.close()
         wrong_skill = await make_action(wrs, "speak", {"text": "not on robot"})
-        assert not (await wrs.submit(wrong_skill)).accepted
+        assert not (await submit_request(wrs, wrong_skill)).accepted
         wrong_skill = await make_action(tts, "pick", {"object": "A"})
-        assert not (await tts.submit(wrong_skill)).accepted
+        assert not (await submit_request(tts, wrong_skill)).accepted
 
 
 async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner():
@@ -189,7 +189,7 @@ async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner()
         events = bus.subscribe("events/action")
         wrs = stack.system.clients["wrs"]
         action = await make_action(wrs, "pick", {"object": "A"})
-        await wrs.submit(action)
+        await submit_request(wrs, action)
         sample = await eventually(events.try_recv, lambda s: s is not None)
         assert decode(sample.payload.to_bytes())["action_id"] == action.action_id
         health = await bus.request("request/health", {})
@@ -230,7 +230,7 @@ async def test_query_reconnect_without_resubmitting_actions():
     async with LocalStack(bindings="configs/robot.toml", duration=0.03) as stack:
         client = stack.system.clients["wrs"]
         action = await make_action(client, "pick", {"object": "A"})
-        await client.submit(action)
+        await submit_request(client, action)
         await eventually(
             lambda client=client, action=action: client.status(action.action_id),
             lambda s: s.state == "SUCCEEDED",
@@ -317,7 +317,7 @@ async def test_snapshot_queries_preserve_pending_context_over_real_zenoh():
         for _ in range(10):
             states = await asyncio.gather(*(node.snapshot() for _ in range(8)))
             assert all("lease_id" not in state.model_dump() for state in states)
-        assert (await node.submit(request)).accepted
+        assert (await submit_request(node, request)).accepted
         done = await eventually(
             lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
         )

@@ -16,9 +16,10 @@ def main():
         # 四次分别验证：首次规划、相同条件复用、目标改变、回到旧目标但物体位置已变。
         for goal in ["put A in B", "put A in B", "put A in C", "put A in B"]:
             # goal 交给 Runtime 选择缓存或 Planner；缓存只存计划结构，每次重新授权执行。
-            system.goal(goal)
-            result = system.wait()
-            assert result["state"] == "SUCCEEDED", result
+            planned = system.goal(goal).wait()
+            assert planned.task is not None, planned
+            assert planned.task.wait().state == "SUCCEEDED"
+            result = system.status()
             calls.append(result["planner_calls"])
             print(json.dumps({
                 "profile": "real_zenoh_scripted_mock",

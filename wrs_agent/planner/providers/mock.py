@@ -9,24 +9,39 @@ from wrs_agent.schemas import Plan, Step
 
 
 def _default_reply(request):
-    """Scripted transfer fixture; other input keeps the historical home response."""
+    """Scripted transfer/home fixture; unfamiliar input must never invent a motion."""
     intent = parse_intent(request.goal)
     if intent is None:
+        if request.goal.strip().lower().rstrip("。.!！") not in {
+            "home",
+            "go home",
+            "回到初始位置",
+            "回原位",
+        }:
+            return PlanDecision(
+                kind="clarify", text="Mock supports explicit home or transfer goals only."
+            ).model_dump_json()
         steps = [Step(step_id="home", skill="move_named_pose", args={"pose": "home"})]
     else:
         steps = [
             Step(step_id="observe", skill="observe"),
             Step(
-                step_id="pick", skill="pick",
-                args={"object": intent.object}, depends_on=["observe"],
+                step_id="pick",
+                skill="pick",
+                args={"object": intent.object},
+                depends_on=["observe"],
             ),
             Step(
-                step_id="place", skill="place",
-                args={"object": intent.object, "target": intent.target}, depends_on=["pick"],
+                step_id="place",
+                skill="place",
+                args={"object": intent.object, "target": intent.target},
+                depends_on=["pick"],
             ),
             Step(
-                step_id="verify", skill="verify",
-                args={"object": intent.object, "target": intent.target}, depends_on=["place"],
+                step_id="verify",
+                skill="verify",
+                args={"object": intent.object, "target": intent.target},
+                depends_on=["place"],
             ),
         ]
     return PlanDecision(kind="execute", plan=Plan(steps=steps)).model_dump_json()

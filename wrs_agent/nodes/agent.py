@@ -1,6 +1,15 @@
 """Runtime services return quickly; task execution runs independently."""
 
-from wrs_agent.schemas import Empty, GoalRequest, TaskControl, TaskRequest
+from wrs_agent.errors import AgentError
+from wrs_agent.schemas import (
+    Empty,
+    GoalQuery,
+    GoalRequest,
+    InterruptRequest,
+    TaskControl,
+    TaskQuery,
+    TaskRequest,
+)
 
 
 def register_runtime(transport, runtime):
@@ -14,12 +23,16 @@ def register_runtime(transport, runtime):
         return await runtime.start(TaskRequest.model_validate(payload))
 
     async def status(payload):
-        Empty.model_validate(payload)
-        return runtime.snapshot()
+        if not payload:
+            return runtime.snapshot()
+        return runtime.task_status(TaskQuery.model_validate(payload).task_id)
+
+    async def goal_status(payload):
+        return runtime.goal_status(GoalQuery.model_validate(payload).request_id)
 
     def control_request(payload):
         if not payload.get("task_id"):
-            raise ValueError("task_id_required")
+            raise AgentError("task_id_required")
         return TaskControl.model_validate(payload)
 
     async def hold(payload):
@@ -27,6 +40,9 @@ def register_runtime(transport, runtime):
 
     async def replace(payload):
         return await runtime.replace(control_request(payload))
+
+    async def interrupt(payload):
+        return await runtime.interrupt(InterruptRequest.model_validate(payload))
 
     async def goal(payload):
         return await runtime.goal(GoalRequest.model_validate(payload))
@@ -38,5 +54,7 @@ def register_runtime(transport, runtime):
     transport.register_handler("request/task/goal", goal)
     transport.register_handler("request/task/start", start)
     transport.register_handler("request/task/status", status)
+    transport.register_handler("request/goal/status", goal_status)
+    transport.register_handler("request/task/interrupt", interrupt, control=True)
     transport.register_handler("request/task/hold", hold, control=True)
     transport.register_handler("request/task/replace", replace, control=True)

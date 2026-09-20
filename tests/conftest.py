@@ -14,7 +14,7 @@ def action(env, skill="pick", args=None, **updates):
         boot_id=world.boot_id,
         control_epoch=world.control_epoch,
         lease_id=world.lease_id,
-        world_version=world.world_version,
+        state_version=world.state_version,
         skill=skill,
         args={"object": "A"} if args is None else args,
     )
@@ -51,3 +51,12 @@ def make_env(tmp_path):
         return result
 
     return make
+
+
+async def submit_request(client, request):
+    """Raw wire entry for conflict/stale-request tests; production uses client.submit."""
+    from wrs_agent.schemas import ActionReceipt
+
+    return ActionReceipt.model_validate(
+        await client.transport.request("request/action/submit", request.model_dump())
+    )

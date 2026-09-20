@@ -11,18 +11,18 @@ def main():
         pick = step("pick", object="A")
         place = step("place", object="A", target="B", after=pick)
         # 显式计划不需要 Planner。播报与抓取没有依赖且使用不同资源，可以并行。
-        system.start(
+        task = system.start(
             step("speak", text="我正在处理。"),
             pick,
             place,
             # 放置完成后另行核对物体位置，不能只凭动作返回就认定目标达成。
             step("verify", object="A", target="B", after=place),
         )
-        for state in system.watch():
-            if len(state["active_actions"]) == 2:
+        for state in task.watch():
+            if len(state.active_actions) == 2:
                 break
         before = system.snapshot()
-        print("并行 Action", state["active_actions"])
+        print("并行 Action", state.active_actions)
         print("用户：你做到哪一步了？")
         # replay 输入已分类的交互意图，演示 Voice 路由；这里没有麦克风或语音识别。
         answer = system.replay("query")
@@ -37,10 +37,10 @@ def main():
         print("用户：停一下。")
         # 明确停止由 Voice 直达机器人节点，不等 Planner；随后检查停止是否已确认。
         print("Voice → WRS", system.replay("stop"))
-        result = system.wait()
+        result = task.wait()
         assert system.snapshot().stop_confirmed
-        assert result["planner_calls"] == 0
-        print("结果", result["state"], "Planner 调用", result["planner_calls"])
+        assert system.status()["planner_calls"] == 0
+        print("结果", result.state, "Planner 调用", system.status()["planner_calls"])
         print("PASS: real Zenoh, four independent nodes; Mock actions and voice replay")
 
 

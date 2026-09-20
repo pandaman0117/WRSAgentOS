@@ -6,6 +6,7 @@ import pytest
 from conftest import control, eventually
 
 from wrs_agent.bindings import load_bindings
+from wrs_agent.nodes.actions import ActionClient
 from wrs_agent.planner import ModelPlanner
 from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
 from wrs_agent.planner.providers.mock import MockClient
@@ -13,11 +14,12 @@ from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, Plan, Step, TaskControl, TaskRequest, new_id
 
 
-class OfflineNode:
+class OfflineNode(ActionClient):
     """Unit-only boundary fixture; never used as network integration evidence."""
 
     def __init__(self, executor):
         self.executor = executor
+        self.node_id = executor.node_id
 
     async def capabilities(self):
         return self.executor.capabilities()
@@ -31,7 +33,7 @@ class OfflineNode:
     async def control(self, kind, request):
         return await self.executor.control(kind, request)
 
-    async def submit(self, request):
+    async def _submit(self, request):
         return await self.executor.submit(request)
 
     async def status(self, action_id):

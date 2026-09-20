@@ -14,8 +14,8 @@ BINDINGS = load_bindings()[1]
 
 def caps():
     return {
-        "wrs": CapabilitySnapshot(skills=["observe", "move_named_pose"]),
-        "tts": CapabilitySnapshot(backend="mock_tts", skills=["speak"]),
+        "wrs": CapabilitySnapshot(skills={"observe": 1, "move_named_pose": 1}),
+        "tts": CapabilitySnapshot(backend="mock_tts", skills={"speak": 1}),
     }
 
 
@@ -42,7 +42,7 @@ def test_whole_plan_rejects_unsupported_before_partial_execution():
             Step(step_id="pick", skill="pick", args={"object": "A"}),
         ]
     )
-    with pytest.raises(ValueError, match="unsupported_skill"):
+    with pytest.raises(ValueError, match="skill_not_on_node"):
         validate_plan(plan, caps(), BINDINGS)
 
 
@@ -71,7 +71,7 @@ def test_bundled_guides_are_available_as_package_resources(name):
 def test_missing_binding_cannot_fall_back_to_a_skill_default():
     assert lookup_skills("移动", caps(), {}) == []
     plan = Plan(steps=[Step(step_id="move", skill="move_named_pose", args={"pose": "B"})])
-    with pytest.raises(ValueError, match="unsupported_skill"):
+    with pytest.raises(ValueError, match="provider_not_found"):
         validate_plan(plan, caps(), {})
 
 
@@ -110,7 +110,7 @@ async def test_local_registration_drives_validation_capabilities_and_execution(t
         duration=0.01,
     )
     try:
-        assert env.capabilities().skills == ["mark"]
+        assert env.capabilities().skills == {"mark": 1}
         assert env.capabilities().resources == ["arm"]
         assert not (await env.submit(action(env, "pick", {"object": "A"}))).accepted
         assert not (await env.submit(action(env, "mark", {"unexpected": "argument"}))).accepted

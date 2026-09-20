@@ -5,18 +5,21 @@ import os
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from wrs_agent.bindings import load_bindings
-from wrs_agent.nodes.actions import ActionClient, action_request
+from wrs_agent.errors import AgentError
+from wrs_agent.handles import GoalHandle, TaskHandle
+from wrs_agent.nodes.actions import ActionClient
+from wrs_agent.policy import text_intent
 from wrs_agent.registry import NodeRegistry
 from wrs_agent.schemas import (
-    TERMINAL,
-    ActionReceipt,
     ControlRequest,
     Interaction,
     Plan,
     Step,
+    TextInput,
+    TextReceipt,
     new_id,
 )
-from wrs_agent.skills import lookup_skills
+from wrs_agent.skills import SKILLS, lookup_skills
 from wrs_agent.transport import Transport
 
 
@@ -26,47 +29,14 @@ def step(skill, *, after=(), **args):
     return Step(
         step_id=new_id(),
         skill=skill,
+        version=SKILLS[skill].spec.version if skill in SKILLS else 1,
         args=args,
         depends_on=[item.step_id for item in dependencies],
     )
 
 
-class Action:
-    """A submitted action. wait() returns terminal status; inspect state/verification."""
-
-    def __init__(self, client, request, receipt):
-        self.client, self.request, self.receipt = client, request, receipt
-        self.id = request.action_id
-        self._cancel_request = None
-
-    async def status(self):
-        return await self.client.status(self.id)
-
-    async def wait(self, *, timeout=10):  # noqa: ASYNC109 - bounded public wait
-        async with asyncio.timeout(timeout):
-            while True:
-                state = await self.status()
-                if state is None:
-                    raise RuntimeError("UNKNOWN: action_status_missing")
-                if state.state in TERMINAL:
-                    return state
-                await asyncio.sleep(0.02)
-
-    async def cancel(self):
-        """Request cancellation; receipt.phase distinguishes STOPPING from STOPPED."""
-        if self._cancel_request is None:
-            state = await self.client.snapshot(control=True)
-            self._cancel_request = ControlRequest(
-                interrupt_id=new_id(),
-                boot_id=self.request.boot_id,
-                control_epoch=state.control_epoch,
-                action_id=self.id,
-            )
-        return await self.client.cancel(self._cancel_request)
-
-
 class System:
-    """A connection to configured nodes; local() additionally owns local processes."""
+    """A connection to configured nodes; launch() additionally owns local processes."""
 
     def __init__(self, transports, definitions, bindings, *, endpoint, site, env_id):
         self.endpoint, self.site, self.env_id = endpoint, site, env_id
@@ -83,7 +53,7 @@ class System:
                 self.roles[role] = name
         self.registry = NodeRegistry(transports, definitions, bindings)
         self.clients = {
-            name: ActionClient(bus)
+            name: ActionClient(bus, node_id=name)
             for name, bus in transports.items()
             if definitions[name]["actions"]
         }
@@ -137,7 +107,7 @@ class System:
 
     @classmethod
     @asynccontextmanager
-    async def local(
+    async def launch(
         cls, *, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None
     ):
         from wrs_agent.processes import LocalStack
@@ -165,67 +135,62 @@ class System:
         )
         return lookup_skills(query, dict(zip(names, caps, strict=True)), self.bindings)
 
+    def task(self, task_id):
+        """Reconnect to a task identity; status() reports task_not_found for unknown IDs."""
+        return TaskHandle(self, task_id)
+
     async def start(self, *steps):
-        """Return the accepted task snapshot; physical execution can start later."""
-        plan = Plan(steps=list(steps))
-        return await self.agent.request(
-            "request/task/start", {"request_id": new_id(), "plan": plan.model_dump()}
+        """Accept an explicit plan and return its immutable execution identity."""
+        result = await self.agent.request(
+            "request/task/start",
+            {"request_id": new_id(), "plan": Plan(steps=list(steps)).model_dump()},
         )
+        return self.task(result["task_id"])
+
+    def planning(self, request_id):
+        """Attach to a planning request, including one accepted through Voice."""
+        return GoalHandle(self, request_id)
+
+    async def send_text(self, text, *, input_id=None, is_final=True, confidence=1.0):
+        """Submit recognized text. ASR/UI adapters own capture and call this off their callback."""
+        event = TextInput(
+            input_id=input_id if input_id is not None else new_id(),
+            text=text,
+            is_final=is_final,
+            confidence=confidence,
+        )
+        control = text_intent(event)[0] in {"stop", "cancel_tts"}
+        raw = await self._transports[self._role("voice")].request(
+            "request/voice/control_text" if control else "request/voice/text",
+            event.model_dump(),
+            control=control,
+            timeout=5.0,
+        )
+        return TextReceipt.model_validate(raw)
 
     async def goal(self, text):
-        """Return a planning request ID; status exposes a task ID after plan validation."""
-        return await self.agent.request("request/task/goal", {"request_id": new_id(), "goal": text})
+        request_id = new_id()
+        await self.agent.request("request/task/goal", {"request_id": request_id, "goal": text})
+        return GoalHandle(self, request_id)
 
     async def status(self):
+        """Runtime overview; use task(id).status() to query a particular execution."""
         return await self.agent.request("request/task/status", {})
-
-    async def watch(self, *, timeout=10):  # noqa: ASYNC109 - bounded observation
-        """Read task progress without involving Planner or stopping any action."""
-        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
-        while True:
-            # Never leave a task-bound timeout active while yielding to caller code.
-            async with asyncio.timeout_at(deadline):
-                state = await self.status()
-            yield state
-            if state["planning"] != "WAITING" and state["state"] in TERMINAL:
-                return
-            if state["planning"] in {"ANSWER", "CLARIFY", "FAILED", "STALE"}:
-                return
-            async with asyncio.timeout_at(deadline):
-                await asyncio.sleep(0.02)
-
-    async def wait(self, *, timeout=10):  # noqa: ASYNC109 - bounded public wait
-        async for state in self.watch(timeout=timeout):
-            result = state
-        return result
 
     async def action(self, skill, **args):
         """Explicit direct action; choose provider from configuration, never from model text."""
+        if skill not in SKILLS:
+            raise AgentError("unknown_skill", stage="discovery")
         if skill not in self.bindings:
-            raise ValueError("unknown_skill")
+            raise AgentError("provider_not_found", stage="discovery")
         name = self.bindings[skill]
         await self.registry.refresh([name])
         client = self.clients[self.registry.node_for(skill)]
         context = await client.context()
         self.registry.check_instance(name, context.boot_id)
-        request = action_request(
-            context,
-            skill,
-            args,
-            task_id=new_id(),
+        return await client.submit(
+            skill, args, context=context, task_id=new_id(), version=SKILLS[skill].spec.version
         )
-        try:
-            receipt = await client.submit(request)
-        except TimeoutError:
-            status = await client.status(request.action_id)
-            if status is None:
-                raise RuntimeError(
-                    f"UNKNOWN: submit_unconfirmed action_id={request.action_id}"
-                ) from None
-            receipt = ActionReceipt(accepted=True, status=status)
-        if not receipt.accepted:
-            raise ValueError(receipt.reason)
-        return Action(client, request, receipt)
 
     async def snapshot(self, node=None):
         """Read one action node directly; defaults to the robot, never aggregates nodes."""
@@ -247,7 +212,7 @@ class System:
                 interrupt_id=new_id(),
                 boot_id=state.boot_id,
                 control_epoch=state.control_epoch,
-                world_version=state.world_version,
+                state_version=state.state_version,
             ),
         )
 

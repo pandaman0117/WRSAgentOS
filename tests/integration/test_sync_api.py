@@ -49,10 +49,10 @@ def test_sync_task_watch_dependencies_and_exception_cleanup():
             pick = step("pick", object="A", after=observe)
             place = step("place", object="A", target="B", after=pick)
             verify = step("verify", object="A", target="B", after=place)
-            system.start(step("speak", text="hello"), observe, pick, place, verify)
-            states = list(system.watch())
-            assert states[-1]["state"] == "SUCCEEDED"
-            assert states[-1]["planner_calls"] == 0
+            task = system.start(step("speak", text="hello"), observe, pick, place, verify)
+            states = list(task.watch())
+            assert states[-1].state == "SUCCEEDED"
+            assert system.status()["planner_calls"] == 0
             assert system.snapshot().data.objects["A"] == "B"
             raise LookupError("user_script_error")
     assert all(p.poll() is not None for p in processes)
@@ -88,9 +88,11 @@ def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids():
         counts = []
         for goal in ["put A in B", "put A in B", "put A in B", "put A in C"]:
             ack = system.goal(goal)
-            assert ack["accepted"] and ack["request_id"]
-            result = system.wait()
-            assert result["state"] == "SUCCEEDED", result
+            assert ack.request_id
+            planned = ack.wait()
+            assert planned.state == "DONE" and planned.task is not None
+            assert planned.task.wait().state == "SUCCEEDED"
+            result = system.status()
             counts.append(result["planner_calls"])
         # First run starts on the table; only the third has matching conditions.
         assert counts == [1, 2, 2, 3] and result["cache_hits"] == 1

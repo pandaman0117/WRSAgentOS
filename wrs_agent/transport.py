@@ -10,10 +10,11 @@ from collections import deque
 
 import zenoh
 
-from wrs_agent.schemas import MAX_BYTES, Envelope, decode, encode, new_id
+from wrs_agent.errors import AgentError, error_info, from_exception
+from wrs_agent.schemas import MAX_BYTES, Envelope, ErrorInfo, decode, encode, new_id
 
 
-class RemoteError(RuntimeError):
+class RemoteError(AgentError):
     pass
 
 
@@ -82,7 +83,7 @@ class Transport:
                 "Set WRS_AGENT_TOKEN to a session credential of at least 16 characters"
             )
         self.session = zenoh.open(loopback_config(endpoint))
-        self.prefix = f"wrs/v1/{site}/{env_id}"
+        self.prefix = f"wrs/v3/{site}/{env_id}"
         self.env_id, self.token, self.source = env_id, token, source
         self.session_id = new_id()
         self.loop = asyncio.get_running_loop()
@@ -111,9 +112,14 @@ class Transport:
         def receive(query):
             self.callback_threads.add(threading.get_ident())
             if query.payload is None or len(query.payload) > MAX_BYTES:
-                query.reply(key, encode({"ok": False, "error": "invalid_payload_size"}))
+                query.reply(
+                    key,
+                    encode({"ok": False, "error": error_info("invalid_payload_size").model_dump()}),
+                )
             elif not inbox.put((query, key, handler)):
-                query.reply(key, encode({"ok": False, "error": "overloaded"}))
+                query.reply(
+                    key, encode({"ok": False, "error": error_info("overloaded").model_dump()})
+                )
 
         handle = self.session.declare_queryable(
             key, zenoh.handlers.Callback(receive, indirect=False), complete=True
@@ -126,20 +132,20 @@ class Transport:
             try:
                 raw = query.payload.to_bytes()
                 if len(raw) > MAX_BYTES:
-                    raise ValueError("payload_too_large")
+                    raise AgentError("payload_too_large")
                 envelope = Envelope.model_validate_json(raw)
                 if envelope.env_id != self.env_id or not secrets.compare_digest(
                     envelope.auth, self.token
                 ):
-                    raise ValueError("unauthorized")
+                    raise AgentError("unauthorized")
                 result = await handler(envelope.payload)
                 reply = {"ok": True, "result": result}
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 # Validation errors can contain input (including credentials). Do not echo them.
-                reason = str(exc) if type(exc) is ValueError else type(exc).__name__
-                reply = {"ok": False, "error": reason[:120]}
+                error = from_exception(exc, node_id=getattr(self, "node_id", None))
+                reply = {"ok": False, "error": error.model_dump()}
             with contextlib.suppress(Exception):
                 query.reply(key, encode(reply))
             del query
@@ -186,7 +192,11 @@ class Transport:
                                 raise RemoteError("query_error")
                             message = decode(reply.ok.payload.to_bytes())
                             if not message.get("ok"):
-                                raise RemoteError(message.get("error", "invalid_reply"))
+                                try:
+                                    error = ErrorInfo.model_validate(message.get("error"))
+                                except ValueError:
+                                    raise RemoteError("invalid_reply") from None
+                                raise RemoteError(error)
                             return message["result"]
                         await asyncio.sleep(0.005)
                 finally:

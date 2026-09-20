@@ -276,3 +276,88 @@ WRS/TTS 共用 ActionClient，TTS 仍无 hold/resume 服务；既有抢占、并
 证据 reports/launch_connect_summary.json、acceptance.json、unit/zenoh/wrs.xml、launch_wrs_initial_failure.txt。
 模型为 Mock/HTTP 夹具，音频为回放/Mock TTS，WRS 为 Lite6 虚拟 FK；实机、GLM 真实服务、
 真实音频、跨机 ACL 与延迟指标未验证；不新增相关能力或测试主张。
+
+
+## 异步启动名称对齐（2026-09-18）
+
+System.local 改为 System.launch，LocalStack 保留；无启动或控制行为修改。
+本轮现有测试 197 passed（173 unit + 24 Zenoh/Mock），0 failed/errors/skipped；
+入门动作、并行停止、WRS 虚拟三个示例 exit 0；Ruff 和 diff --check 通过。
+命令与证据：reports/launch_name_summary.json、launch_name.xml、launch_name_examples.json。
+没有重跑全部 WRS 测试，WRS 本轮证据为虚拟示例；上一轮完整回归 225 passed 保留为历史。
+真实 GLM、音频、硬件、跨机和延迟未新增验证；没有 commit/push。
+
+## 示例配置路径修复（2026-09-18）
+
+两个示例以脚本位置定位仓库配置，保留 API/CLI 相对路径语义；路径在模块加载时解析，不放入异步函数。
+既有进程/绑定/连接/router 回归 **39 passed，0 failed/errors/skipped**：
+`./scripts/run.ps1 -m pytest -q tests/unit/test_processes.py tests/unit/test_registry.py tests/integration/test_connect.py tests/integration/test_router.py --junitxml=reports/example_paths.xml`。
+两个示例分别从仓库根、各自脚本目录和仓库外临时目录启动，6 次全部 exit 0；
+TTS 客户端完成动作后服务仍在线，启动器退出后自有进程已清理。
+通过指定 Python -X utf8 -S scripts/run.py 启动，具体绝对路径命令、cwd 和依赖版本见
+reports/example_paths_summary.json；Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1、Ruff 0.16.8。
+`./scripts/run.ps1 -m ruff check wrs_agent tests examples scripts` 和 `git diff --check` 通过。
+
+补充 IDE 方式：从 examples/developer 将仓库根目录加入 PYTHONPATH，直接用指定解释器执行
+01_zenoh_roundtrip.py，通过；共享环境 Zenoh 1.10.1、Pydantic 2.12.3，未修改共享环境。
+普通终端不设置导入路径时直接执行会报 ModuleNotFoundError，使用项目启动器即可加载项目与锁定依赖。
+首次 Ruff 的 ASYNC240 已通过将路径解析移到模块级修复，原输出保留 example_paths_lint_initial.txt。
+原始配置失败、无导入路径的直接运行失败和 IDE 成功输出均在 reports/example_paths_*.txt。
+本轮无剩余失败/阻塞，无新增依赖或协议改动；未运行完整回归、WRS 虚拟、真实模型/音频/硬件验证。
+下一入口：在 IDE 重跑 developer/01_zenoh_roundtrip.py；普通终端从仓库根使用
+`./scripts/run.ps1 examples/developer/01_zenoh_roundtrip.py`。
+
+
+## 执行绑定、控制重试与任务句柄（2026-09-18）
+
+已实现四项修复、客户端内部构造 ActionRequest、state_version / 协议 v2，以及 TaskHandle / GoalHandle。context 保留，自动接纳配置外节点或技能未实现。任务整体预检绑定参与实例与控制版本，独立分支保持隔离；Voice 同 ID 并发共享与重试不产生半成品成功；hold/replace 按参与者确认，连续替换仍追踪旧资源；Mock TTS 仅在历史全为已知终态时重新准入。
+
+最终执行 `./scripts/run.ps1 scripts/verify.py --wrs`：**243 passed**（187 unit + 51 真实 Zenoh/Mock + 5 WRS 虚拟），0 failed/errors/skipped。标记选择的 deselected 属于分组运行，两个集成分组共同覆盖全部集成测试。所有验收示例（含新 task_handles）、Ruff、doctor 通过。`git diff --check` 单独通过；现有 WRS_AUDIT 换行提示不影响检查。
+
+新增回归覆盖重启后旧任务拒绝、已提交不明动作 UNKNOWN、控制查询失败/回复丢失/并发重试、无关 TTS 离线、TTS 历史恢复、独立版本校验、连续替换、排队结果、4096 容量、重连与多客户端按 ID 查询、Runtime 重启旧 ID 不存在、等待超时/关闭观察/断开客户端不取消执行，以及后续规划失败不改写旧结果。
+
+证据：`reports/revision_summary.json`、`reports/acceptance.json`、`reports/unit.xml`、`reports/zenoh.xml`、`reports/wrs.xml` 及对应 txt。切片证据为 revision_slice1.xml、revision_unit.xml、revision_zenoh.xml、revision_handles.xml、revision_observation.xml。迁移中出现过 4 项旧 Action 导入失败，已修复并完整复测；原失败记录 revision_slice2.xml 保留。首次 Ruff 报告的导入位置及长行已修复，最终输出 All checks passed。
+
+依赖未变：Python 3.12.0，Zenoh 1.9.0（router 同版），Pydantic 2.13.5，pytest 9.1.1，pytest-asyncio 1.4.0，Ruff 0.16.8；WRS 固定 2bb014b747833c2fd9345115fbe26ffb11376f20。无新增包、锁文件或 submodule 变更。
+
+未验证：实机、真实音频、付费模型、跨机认证/ACL、延迟指标及真实抓取；WRS 证据限 Lite6 虚拟 FK。任务/规划历史为 Runtime 会话内存，重启不恢复；动作日志仍保留。协议 v2 无旧字段别名，外部客户端与节点需一起升级。当前授权范围无剩余失败或阻塞；context 改造与动态接纳按用户要求留待讨论。没有 commit/push。
+
+关键文件：wrs_agent/runtime.py、actions.py、nodes/actions.py、nodes/voice.py、nodes/agent.py、schemas.py、handles.py、system.py、sync.py、transport.py；对应 unit/integration 回归和示例一并迁移。完整调用链见 [task_handles.md](task_handles.md)，下一入口：`./scripts/run.ps1 examples/tasks/05_task_handles.py`。
+
+
+## 结构化错误与技能合同版本（2026-09-19）
+
+本轮只实施高收益的两项：统一 ErrorInfo / AgentError，以及节点声明 name -> version 并校验技能合同。参数 Schema 仍来自唯一的本地参数模型，Node Registry 不复制合同。Runtime 整体预检、节点准入、技能检索与计划缓存都检查版本；不兼容时任何分支都不会开始执行。普通 step()/action() 自动采用本地注册版本。
+
+错误保留 code、stage 和已知的节点/任务/动作身份。提交前超时为 FAILED；已提交且无法查询确认的动作才为 execution_unknown / UNKNOWN。服务不返回任意异常或验证输入，规划缓存诊断也只保存错误码。资源冲突不停止其他客户端的动作，既有节点内最终准入继续生效。同步和异步共用实现；未改造 context、start/bindings 名称，未增加自动接纳、多实例路由或设备所有权服务。
+
+`./scripts/run.ps1 scripts/verify.py --wrs` 全部通过：205 unit、53 Zenoh/Mock、5 WRS virtual，以及全部验收示例（含新增 errors_and_versions）、Ruff、doctor。末次审查将规划缓存诊断由异常原文改成错误码，新增一项回归后，`./scripts/run.ps1 -m pytest -q tests/unit --junitxml=reports/errors_final_unit.xml` 为 **206 passed**；规划、句柄、错误协议定向复测 **11 passed**，最终 Ruff 与 diff --check 通过。因此当前总数 **264 passed（206 + 53 + 5），0 failed/errors/skipped**，相对前轮新增 21 项测试；11 项复测不重复计数。各集成分组选中的 deselected 不算 skip。
+
+新增证据覆盖：独立 TTS 进程重启后声明 speak@2，整个旧版本任务零执行；只用机器人的新任务不受影响；错误跨真实 Zenoh 和客户端重连保留身份；版本 2 匹配时可执行；旧计划缓存失效；离线/未就绪/歧义/未绑定/合同不兼容区分；提交前后故障、同资源冲突、原异常脱敏、规划结果不可被调用方修改。
+
+证据汇总 `reports/errors_versions_summary.json`；完整验收 `reports/acceptance.json`、unit/zenoh/wrs.xml；最终复测 errors_final_unit.xml、errors_final_integration.xml、errors_final_checks.json。首次组合测试为 206 passed / 1 failed，旧 ActionHandle 测试夹具缺少 node_id/task_id，已补齐并加强身份断言；原始失败 errors_complete_targeted.xml 保留。自动审批曾拒绝整文件还原；改为精确匹配撤回本轮三处纯格式变化后通过，无待批准操作。
+
+依赖无变化：Python 3.12.0、Zenoh/router 1.9.0、Pydantic 2.13.5、pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8，WRS commit 2bb014b747833c2fd9345115fbe26ffb11376f20。无新依赖、锁文件或 submodule 变更。未验证实机、真实音频、付费模型、跨机 ACL、性能基准和实际抓取；WRS 仅 Lite6 虚拟 FK。当前范围无失败或阻塞，没有 commit/push。
+
+本轮消息合同不兼容：前缀为 wrs/v3/{site}/{target}，Envelope.schema_version=3，skills 从列表变为版本映射，RPC error 变为结构化对象；外部节点与客户端须一起升级。历史动作日志保留、不重播。主要修改 errors.py、schemas.py、transport.py、registry.py、skills/__init__.py、cache.py、actions.py、nodes/actions.py、runtime.py、system.py、handles.py 及对应测试。使用说明见 [errors_and_versions.md](errors_and_versions.md)。下一入口：`./scripts/run.ps1 examples/tasks/06_errors_and_versions.py`；context 和动态接纳继续留待单独讨论。
+
+
+## 开发交接版：识别文本、节点/技能扩展与 GLM 执行链（2026-09-20）
+
+本轮补齐识别文本 TextInput/TextReceipt、同步/异步 send_text、按规划 ID 重连、Runtime 当前任务中断入口。明确停止在本地控制路径执行，不等待 Planner；同时使待返回规划失效、清空追加队列，按参与资源停止。部分识别不占用去重编号，最终输入按稳定 ID 去重；重复停止不作用于后来的替换任务。Agent 不可达时尝试停止独立机器人动作，但仍报告 UNKNOWN，不能宣称整个任务已停止。
+
+新增自定义 console TTS 节点和 greet 技能，客户端、Agent、节点共享同一合同，展示参数验证、静态绑定、直接 Action、Runtime 任务与取消。GLM 既有适配器增加规划错误保留；新端到端示例通过 HTTP 夹具执行到独立 Mock 节点，真实服务必须显式 --live-model。Mock 对不支持的输入改为 CLARIFY，不再默认生成 home 运动。WRS 复用现有真实 Lite6 FK 示例，不新增虚构抓取能力。
+
+完整命令 `./scripts/run.ps1 scripts/verify.py --wrs`：**293 passed（226 unit + 62 真实 Zenoh/Mock + 5 WRS virtual），0 failed/errors/skipped**。集成标记的 deselected 属于两个分组选择，不是漏跑或 skip。全部验收示例（含 voice_control、custom_skill、glm_runtime）、Ruff 和 doctor PASS。相对前轮新增 29 项测试。
+
+重点覆盖：最终文本输入与重连查询、同时识别/查询不打断、只取消 TTS、停止与显式替换、重复停止不重定向、模型挂起/迟到失效、控制端点鉴权、Agent 离线仍尝试机器人停止、仅 TTS 任务不依赖离线机器人、自定义节点从仓库外工作目录运行，以及 GLM HTTP 401 作为结构化规划错误返回且零动作执行。语音回归末次将停止确认断言改为有界等待，避免把 STOPPING 当 STOPPED；复测 `tests/integration/test_voice_text.py` **7 passed**，不重复计入总数。
+
+交接示例另用两个独立 Python 客户端先后连接同一个自定义节点/Agent，各自完成直接调用、任务与取消；两次客户端退出后服务仍存活，启动器退出后全部自有进程已结束。证据 `reports/handoff_custom_connect.json`。没有创建新的插件平台或依赖注入容器。
+
+本地证据：`reports/handoff_summary.json`、`reports/acceptance.json`、unit/zenoh/wrs.xml、`reports/handoff_voice_final.xml` 及各示例 txt；切片 handoff_text.xml（40）、handoff_extensions.xml（1）、handoff_glm.xml（40）。初次 Ruff 的两处格式问题已修复，最终 All checks passed；diff --check 通过。
+
+依赖无变化：Python 3.12.0、Zenoh/router 1.9.0、Pydantic 2.13.5、pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；WRS 仍固定 2bb014b747833c2fd9345115fbe26ffb11376f20，submodule 无修改。新增端点为 v3 的增量；此前 v3 技能版本/错误合同仍要求客户端和节点一起升级。
+
+未验证/未实现：真实 ASR 与麦克风、有声 TTS、UI、真实 GLM 服务、WRS 抓放/碰撞、实机、跨机 ACL、性能指标和干净机器 WRS 全依赖恢复。context、动态接纳、设备所有权协调、持久任务恢复本轮不扩展。软件验收没有失败或阻塞，这些后续项目不记作已通过。语音输入是识别后的文本及保守词表，不是自然语言理解或硬件急停认证。
+
+交接入口：[DEVELOPMENT.md](DEVELOPMENT.md)、[VOICE_INPUT.md](VOICE_INPUT.md)。后续开发者可分别接 WRS、TTS、ASR 和 UI，按文档合同交付各自的后端与实际证据。可运行命令：`./scripts/run.ps1 examples/tasks/07_voice_control.py`、`./scripts/run.ps1 examples/developer/05_custom_skill.py`、`./scripts/run.ps1 examples/developer/06_glm_runtime.py`。

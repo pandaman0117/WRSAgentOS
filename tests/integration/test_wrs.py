@@ -2,7 +2,7 @@ import asyncio
 import sys
 
 import pytest
-from conftest import eventually
+from conftest import eventually, submit_request
 
 from wrs_agent.processes import LocalStack
 from wrs_agent.schemas import ActionRequest, ControlRequest, Plan, Step, decode, new_id
@@ -19,7 +19,7 @@ async def request_for(node, *, pose="B", revision=0, skill="move_named_pose"):
         boot_id=world.boot_id,
         control_epoch=world.control_epoch,
         lease_id=world.lease_id,
-        world_version=world.world_version,
+        state_version=world.state_version,
         skill=skill,
         args={"pose": pose} if skill == "move_named_pose" else {"object": "A"},
     )
@@ -32,17 +32,17 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         assert cap.backend == "wrs_virtual" and cap.verification == "wrs_fk"
         assert not cap.hardware and not cap.controller_flush
         assert "pick" in cap.unsupported and "pick" not in cap.skills
-        assert not (await node.submit(await request_for(node, skill="pick"))).accepted
+        assert not (await submit_request(node, await request_for(node, skill="pick"))).accepted
         request = await request_for(node, revision=2)
         subscriber = stack.system.clients["wrs"].transport.subscribe("events/action", capacity=64)
-        receipt = await node.submit(request)
+        receipt = await submit_request(node, request)
         assert receipt.accepted and receipt.status.state == "ACCEPTED"
         await eventually(lambda: node.status(request.action_id), lambda s: s.progress > 0)
         during = await node.snapshot()
         assert during.active_action == request.action_id
         assert during.data.kinematics.source == "wrs_fk" and during.data.kinematics.valid
         assert during.data.kinematics.joint_unit == "rad"
-        assert (await node.submit(request)).accepted
+        assert (await submit_request(node, request)).accepted
         result = await eventually(
             lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
         )
@@ -59,7 +59,7 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"
         ] == 1
-        stale = await node.submit(await request_for(node, revision=1))
+        stale = await submit_request(node, await request_for(node, revision=1))
         assert not stale.accepted and stale.reason == "stale_revision"
         assert "wrs" not in sys.modules
     assert all(p.poll() is not None for p in stack.processes)
@@ -72,7 +72,7 @@ async def test_real_wrs_cancel_hold_resume_and_old_epoch(kind):
     ) as stack:
         node = stack.system.clients["wrs"]
         request = await request_for(node)
-        await node.submit(request)
+        await submit_request(node, request)
         await eventually(lambda: node.status(request.action_id), lambda s: s.progress > 0)
         old = await request_for(node, pose="C")
         world = await node.snapshot()
@@ -90,19 +90,19 @@ async def test_real_wrs_cancel_hold_resume_and_old_epoch(kind):
         stopped = await node.snapshot()
         await asyncio.sleep(0.08)
         assert (await node.snapshot()).data.kinematics.joints == stopped.data.kinematics.joints
-        assert not (await node.submit(old)).accepted
+        assert not (await submit_request(node, old)).accepted
         resume = await node.control(
             "resume",
             ControlRequest(
                 interrupt_id=new_id(),
                 boot_id=stopped.boot_id,
                 control_epoch=stopped.control_epoch,
-                world_version=stopped.world_version,
+                state_version=stopped.state_version,
             ),
         )
         assert resume.accepted and (await node.snapshot()).active_action is None
         fresh = await request_for(node, pose="C")
-        assert (await node.submit(fresh)).accepted
+        assert (await submit_request(node, fresh)).accepted
         await eventually(lambda: node.status(fresh.action_id), lambda s: s.state == "SUCCEEDED")
 
 

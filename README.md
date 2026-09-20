@@ -1,8 +1,10 @@
 # WRS-Agent V1
 
+准备接手 WRS、TTS、ASR 或 UI 开发的同学，先看 [开发交接与分工](docs/DEVELOPMENT.md)，其中包含可运行的节点/Skill 例子、接入合同和验收入口。
+
 第一次接触这个项目，可以先读 [从一个动作开始，读懂 WRS-Agent](docs/getting_started.md)：跟着可运行的例子，逐步理解技能、动作、任务，以及系统为什么这样分工。
 
-已实现 M0–M3 的虚拟运行切片、M4 的 GLM 非流式适配与离线联调，以及 M5 本地技能库、严格条件缓存和一次恢复。单 Runtime/Planner、独立 WRS 虚拟节点或 Mock WRS、Mock TTS、Voice 事件回放，通过真实 Zenoh router 跨进程通信。
+已实现 M0–M3 的虚拟运行切片、M4 的 GLM 非流式适配与离线联调，以及 M5 本地技能库、严格条件缓存和一次恢复。单 Runtime/Planner、独立 WRS 虚拟节点或 Mock WRS、Mock TTS、Voice 识别文本输入与事件回放，通过真实 Zenoh router 跨进程通信。真实麦克风、ASR、有声 TTS 和 UI 待分工接入。
 
 技能由 `configs/bindings.toml` 显式绑定执行节点。Runtime 按依赖和资源调度；WRS 只执行机器人技能，TTS 自己管理播报。Voice 可直接取消 TTS 或停止 WRS；查询和 VAD 不停止机械臂。模型等待不会占用控制路径。
 
@@ -27,7 +29,7 @@ with launch() as system:  # 真 Zenoh + 独立 Mock 节点，退出时清理
     print(motion.wait())    # 此处才等待机器人动作完成
 ```
 
-`launch()` 按 TOML 的 enabled 启动节点；默认配置包含 Agent、机器人、Mock TTS 和 Voice 回放。
+`launch()` 按 TOML 的 enabled 启动节点；默认配置包含 Agent、机器人、Mock TTS 和 Voice 文本/回放入口。
 它启动本地 Zenoh，等待节点就绪，退出时清理自己启动的进程；本身不发送任务。
 只需播报可用 `launch(bindings="configs/tts.toml")`，只需机器人用 `configs/robot.toml`。
 `system.skills("播报")` 查询当前可用技能，无需手工创建客户端或能力字典。
@@ -62,23 +64,40 @@ from wrs_agent import launch, step
 with launch() as system:
     picked = step("pick", object="A")
     placed = step("place", object="A", target="B", after=picked)
-    system.start(
+    task = system.start(
         step("speak", text="我正在处理"),  # 与抓取并行
         picked, placed,
         step("verify", object="A", target="B", after=placed),
     )
-    print(system.wait()["state"])
+    print(task.wait().state)
 ```
 
-`start/goal` 快速接收任务；`status/watch` 查询或迭代进度，不调用 Planner。
+识别后的完整文本或 UI 输入可以通过同一个入口发送：
+
+```python
+receipt = system.send_text("put A in B", input_id="utterance-001")
+planned = system.planning(receipt.request_id).wait()
+if planned.task is not None:
+    print(planned.task.wait().state)
+```
+
+`send_text("停止")` 在 Runtime 控制路径绑定并停止当前任务、撤销待返回的规划；重复相同 input_id 不会停止后来的新任务。
+`send_text("停止播报")` 只取消当前 TTS；查询、附和和未完成识别不停止机器人。
+回执只表示受理，STOPPING 仍需确认；自然语言修订不自动恢复运动。规则、重试和 ASR/UI 接入见 [语音文本合同](docs/VOICE_INPUT.md)。
+演示：`./scripts/run.ps1 examples/tasks/07_voice_control.py`。这不是麦克风识别或硬件急停验证。
+
+`start()` 返回 TaskHandle，`goal()` 返回 GoalHandle；`task.status/watch` 查询或迭代指定任务的进度，不调用 Planner。
+`system.status()` 保留 Runtime 总览。规划结果、停止与替换语义见 [任务句柄与完整调用链](docs/task_handles.md)。
 `nodes()` 直接查询配置中的节点、技能、能力和 ready。Skill Registry 描述技能，
 Node Registry 描述当前执行者；配置决定绑定，模型只提出技能。
+节点以 `{"speak": 1}` 声明实现的技能版本，复用技能库中的唯一参数合同；版本不匹配时整项任务在派发前拒绝。
+失败可通过 `result.error.code` 或 `AgentError.error` 读取，不必解析异常文本。见 [错误与技能版本](docs/errors_and_versions.md)。
 在线实例由 Zenoh Liveliness 通知，能力按 boot_id 缓存；ready 仍查询节点，提交前校验当前授权。多实例歧义时拒绝执行；Vision 仍只有 disabled 声明。
 
 `launch(backend="wrs_virtual")` 使用真实 WRS FK 虚拟节点，不连接硬件；
 当前 WRS profile 仅支持 observe/move_named_pose，pick/place 例子使用 Mock。
 同步入口适用于普通单线程脚本。已有异步程序继续使用
-`async with System.local()`，方法语义相同。同步包装仅复用一个标准库
+`async with System.launch()`，方法语义相同。同步包装仅复用一个标准库
 `asyncio.Runner`，不新增后台事件循环线程、依赖、调度器或协议。
 
 节点无需共同继承基类。内部只有一种 ActionClient，WRS/TTS 共用动作协议；
@@ -89,16 +108,16 @@ RobotClient 子类已删除。普通用户用 system.action，不必选择或组
 Action 客户端和服务绑定集中在 `nodes/actions.py`，Planner 接口和计划校验集中在
 `planner/__init__.py`。技能描述不再带默认节点，执行位置只由 TOML 配置决定。
 
-现有 Zenoh 前缀保持 wrs/v1/{site}/{target}（target 由节点配置 suffix 确定）。
+Zenoh 协议 v3 使用前缀 wrs/v3/{site}/{target}（target 由节点配置 suffix 确定）。
 精确 Query：request/node/{node_id}、request/action/context、request/action/status；
 Action：request/action/submit、request/control/cancel；Event：events/action。
 WRS 另有 request/snapshot、request/control/hold|resume。Agent 提供 request/task/*
-及 request/nodes；Voice 直接使用目标节点的控制服务。旧 env_id 字段保持线协议兼容。
+及 request/nodes；Voice 直接使用目标节点的控制服务。env_id 字段保持原含义；信封 schema_version=3，客户端与节点须同时升级。
 `system.snapshot()` 默认查询机器人，`system.snapshot("tts")` 查询播报节点；每次只读一个节点。
-返回的 `node_id`、`boot_id`、`world_version`、`captured_at_ns` 说明来源、实例、业务版本和采集时间，
+返回的 `node_id`、`boot_id`、`state_version`、`captured_at_ns` 说明来源、实例、业务版本和采集时间，
 `data` 是该节点的类型化业务数据：机器人读 `.data.pose`，播报读 `.data.completed`。
 这不是全系统在同一时刻的聚合视图；采集时间来自源节点时钟，也不代替观测有效性检查。
-`world_version` 保留现有线路名，表示该节点的业务状态版本；停止授权仍由 control_epoch 单独约束。
+`state_version` 表示该节点的业务状态版本；control_epoch 单独约束执行权限，两个版本分别校验。
 
 `snapshot()` 只读状态，不签发执行凭证；底层调用者通过 `context()` 取得当前状态及 `lease_id`，然后提交动作。普通 `system.action()` 自动处理，不需要用户填写。旧 `snapshot().lease_id` 调用需要迁移。
 
@@ -176,7 +195,7 @@ tasks/03_wrs_scene 是 headless 场景：独立 WRS Node 使用真实 Lite6，�
 
 [技能库](wrs_agent/skills/README.md) 的机器合同在 `wrs_agent/skills/__init__.py`；中文别名/标签只负责候选检索。Runtime 对整份计划先检查节点能力，再启动动作。候选检索缓存与计划缓存分别计数，进度不调用 Planner。
 
-计划缓存仅在任务实际验证成功后保存严格四步转移模板，最多 64 项。命中要求相关对象位置、标定、技能合同与能力仍匹配；每次执行重新获取授权和动作 ID。否定、数量、时序或未知模板不自动复用。tasks/02_cache_reuse 示例的 model_calls 为 1→1→2→3：第二次命中，改目标和相关状态变化拒绝旧模板。计数来自独立 Agent 内的脚本化 Mock ModelClient，经真实 Zenoh 执行，不声称节省真实 GLM 请求。Mock 仅识别严格转移模板，其他输入保留固定 home 回复，不代表自然语言理解。
+计划缓存仅在任务实际验证成功后保存严格四步转移模板，最多 64 项。命中要求相关对象位置、标定、技能合同与能力仍匹配；每次执行重新获取授权和动作 ID。否定、数量、时序或未知模板不自动复用。tasks/02_cache_reuse 示例的 model_calls 为 1→1→2→3：第二次命中，改目标和相关状态变化拒绝旧模板。计数来自独立 Agent 内的脚本化 Mock ModelClient，经真实 Zenoh 执行，不声称节省真实 GLM 请求。Mock 只支持严格转移模板与明确的 home/回原位指令；其他输入返回 CLARIFY，不默认执行运动，不代表自然语言理解。
 
 恢复仅对明确的定位/抓取失败执行一次 observe 后重试，且夹爪/对象状态明确、任务仍有效且 boot/epoch 未改变；新尝试使用新 action_id。UNKNOWN、权限/前置条件错误与停止未确认不重试。测试可用 grasp_once/localization_once 注入瞬时失败；这不是物理故障恢复认证。
 

@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from conftest import submit_request
 
 from tests.conftest import eventually
 from wrs_agent import System, step
@@ -13,13 +14,13 @@ pytestmark = pytest.mark.zenoh
 
 
 async def test_system_task_parallel_query_and_scoped_voice_controls():
-    async with System.local(duration=2) as system:
+    async with System.launch(duration=2) as system:
         nodes = await system.nodes()
         assert {n for n, s in nodes.items() if s["ready"]} == {"wrs", "tts", "agent", "voice"}
         assert nodes["vision"]["health"] == "unsupported" and nodes["vision"]["boot_id"] is None
         move = step("move_named_pose", pose="B")
         speak = step("speak", text="working")
-        await system.start(move, speak)
+        task = await system.start(move, speak)
         state = await eventually(system.status, lambda s: len(s["active_actions"]) == 2)
         wrs, tts = system.clients["wrs"], system.clients["tts"]
         before = await system.snapshot()
@@ -37,12 +38,13 @@ async def test_system_task_parallel_query_and_scoped_voice_controls():
             lambda: wrs.status(state["active_actions"][move.step_id]),
             lambda s: s.state == "CANCELLED",
         )
-        assert (await system.wait())["planner_calls"] == 0
+        await task.wait()
+        assert (await system.status())["planner_calls"] == 0
         assert (await system.snapshot()).stop_confirmed
 
 
 async def test_action_handle_dedup_status_and_tts_without_robot_controls():
-    async with System.local(duration=0.3) as system:
+    async with System.launch(duration=0.3) as system:
         tts = system.clients["tts"]
         assert type(tts) is type(system.clients["wrs"]) is ActionClient
         assert not hasattr(tts, "hold")
@@ -56,11 +58,11 @@ async def test_action_handle_dedup_status_and_tts_without_robot_controls():
         assert "lease_id" not in observed.model_dump()
         say = await system.action("speak", text="first")
         assert say.receipt.status.state == "ACCEPTED"
-        assert (await tts.submit(say.request)).accepted
+        assert (await submit_request(tts, say.request)).accepted
         assert (await say.wait()).state == "SUCCEEDED"
         spoken = await system.snapshot("tts")
         assert spoken.data.completed == 1 and spoken.data.last_text == "first"
-        assert spoken.world_version > observed.world_version
+        assert spoken.state_version > observed.state_version
         health = await tts.transport.request("request/health", {})
         assert health["executions"] == 1
         for key in ("hold", "resume"):
@@ -84,7 +86,7 @@ async def test_action_handle_dedup_status_and_tts_without_robot_controls():
 
 
 async def test_direct_nodes_survive_agent_exit_and_registry_rejects_offline_provider():
-    async with System.local(duration=2) as system:
+    async with System.launch(duration=2) as system:
         await system.nodes()
         motion = await system.action("move_named_pose", pose="B")
         speech = await system.action("speak", text="direct")
@@ -106,7 +108,7 @@ async def test_direct_nodes_survive_agent_exit_and_registry_rejects_offline_prov
         await asyncio.to_thread(tts.wait, timeout=3)
         await eventually(system.registry.snapshot, lambda view: view["tts"]["health"] == "offline")
         assert (await system.nodes())["tts"]["health"] == "offline"
-        with pytest.raises(ValueError, match="node_not_ready"):
+        with pytest.raises(ValueError, match="node_unavailable"):
             await system.action("speak", text="must not execute")
 
 
@@ -119,31 +121,31 @@ async def test_runtime_resolves_renamed_node_from_configuration(tmp_path):
         path.write_text("not valid TOML", encoding="utf-8")
         system = stack.system
         assert (await system.nodes())["wrs_lite6"]["ready"]
-        await system.start(step("move_named_pose", pose="B"), step("speak", text="parallel"))
-        assert (await system.wait())["state"] == "SUCCEEDED"
+        task = await system.start(step("move_named_pose", pose="B"), step("speak", text="parallel"))
+        assert (await task.wait()).state == "SUCCEEDED"
         world = await system.snapshot()
         assert world.data.pose == "B" and world.node_id == "wrs_lite6"
         task = await system.start(step("move_named_pose", pose="C"))
         result = await system.agent.request(
-            "request/task/hold", {"request_id": new_id(), "task_id": task["task_id"]}, control=True
+            "request/task/hold", {"request_id": new_id(), "task_id": task.id}, control=True
         )
         assert result["accepted"]
 
 
 async def test_public_action_recovers_lost_receipt_and_repeated_cancel(monkeypatch):
-    async with System.local(duration=0.2) as system:
+    async with System.launch(duration=0.2) as system:
         tts = system.clients["tts"]
-        submit = tts.submit
+        submit = tts._submit
 
         async def lose_receipt(request):
             await submit(request)
             raise TimeoutError("injected response loss after real Zenoh acceptance")
 
-        monkeypatch.setattr(tts, "submit", lose_receipt)
+        monkeypatch.setattr(tts, "_submit", lose_receipt)
         action = await system.action("speak", text="one effect")
         assert (await action.wait()).state == "SUCCEEDED"
         assert (await tts.transport.request("request/health", {}))["executions"] == 1
-        monkeypatch.setattr(tts, "submit", submit)
+        monkeypatch.setattr(tts, "_submit", submit)
         cancelled = await system.action("speak", text="cancel")
         first = await cancelled.cancel()
         assert first.accepted
@@ -179,10 +181,12 @@ async def test_runtime_hold_has_no_normal_capability_query(monkeypatch):
 
 
 async def test_unready_provider_prevents_partial_task_effects():
-    async with System.local(duration=0.1) as system:
+    async with System.launch(duration=0.1) as system:
         await system.replay("stop")
-        await system.start(step("speak", text="must not start"), step("move_named_pose", pose="B"))
-        assert (await system.wait())["state"] == "FAILED"
+        task = await system.start(
+            step("speak", text="must not start"), step("move_named_pose", pose="B")
+        )
+        assert (await task.wait()).state == "FAILED"
         for node in ("wrs", "tts"):
             health = await system.clients[node].transport.request("request/health", {})
             assert health["executions"] == 0
@@ -215,11 +219,11 @@ async def test_configuration_cannot_grant_an_unregistered_node_skill(tmp_path):
     source = DEFAULT.read_text(encoding="utf-8")
     assert 'pick = "wrs"' in source
     bindings.write_text(source.replace('pick = "wrs"', 'pick = "tts"'), encoding="utf-8")
-    async with System.local(bindings=bindings, duration=0.02) as system:
+    async with System.launch(bindings=bindings, duration=0.02) as system:
         nodes = await system.nodes()
-        assert nodes["tts"]["skills"] == ["speak"]
+        assert nodes["tts"]["skills"] == {"speak": 1}
         assert "pick" not in {skill.name for skill in await system.skills("pick")}
-        with pytest.raises(ValueError, match="unsupported_skill"):
+        with pytest.raises(ValueError, match="skill_not_on_node"):
             await system.action("pick", object="A")
         health = await system.clients["tts"].transport.request("request/health", {})
         assert health["executions"] == 0

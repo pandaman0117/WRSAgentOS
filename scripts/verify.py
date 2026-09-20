@@ -36,6 +36,11 @@ def main():
         ("skill_library", ["examples/beginner/02_skills.py"]),
         ("plan_cache", ["examples/tasks/02_cache_reuse.py"]),
         ("system_nodes", ["examples/tasks/01_parallel_and_stop.py"]),
+        ("task_handles", ["examples/tasks/05_task_handles.py"]),
+        ("errors_and_versions", ["examples/tasks/06_errors_and_versions.py"]),
+        ("voice_text", ["examples/tasks/07_voice_control.py"]),
+        ("custom_node_skill", ["examples/developer/05_custom_skill.py"]),
+        ("glm_runtime_fixture", ["examples/developer/06_glm_runtime.py"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
         (
             "doctor",
@@ -69,7 +74,7 @@ def main():
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=120,
+            timeout=240,
             creationflags=NO_WINDOW,
         )
         output = result.stdout + result.stderr
@@ -95,7 +100,7 @@ def main():
         **({} if args.wrs else {"wrs_virtual_runtime": "Opt in with scripts/verify.py --wrs."}),
         "wrs_pick_place": "Unsupported in bare Lite6 profile; no validated grasp/contact scene.",
         "glm_live": "GLM HTTP fixtures only; no account model/use authorization, no live call.",
-        "audio_live": "Voice replay and Mock TTS only; microphone/ASR/audible output untested.",
+        "audio_live": "Text control and Mock/console TTS only; real ASR/audio untested.",
         "vision_node": "No independent Vision process in this minimum increment.",
         "hardware": "Hardware backend cannot be selected.",
         "two_machine": "Loopback only; remote authentication/ACL profile is M7.",

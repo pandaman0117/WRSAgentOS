@@ -32,7 +32,7 @@ async def test_action_and_control_idempotence_and_fencing(make_env):
         stale = request.model_copy(update={"action_id": "late"})
         assert (await env.submit(stale)).reason == "stale_epoch"
         assert not (await env.control("resume", control(env), authorized=False)).accepted
-        assert (await env.resume(control(env, world_version=env.world.version))).accepted
+        assert (await env.resume(control(env, state_version=env.world.version))).accepted
         assert env.executions == 1  # Resume doesn't revive trajectories.
     finally:
         await env.close()
@@ -79,7 +79,7 @@ async def test_faults_do_not_claim_success(make_env, fault, state, verification)
         assert result.state == state and result.verification == verification
         assert env.world.held is None
         if state == "UNKNOWN":
-            assert not (await env.resume(control(env, world_version=env.world.version))).accepted
+            assert not (await env.resume(control(env, state_version=env.world.version))).accepted
             assert not (await env.submit(action(env))).accepted
     finally:
         await env.close()
@@ -126,7 +126,7 @@ async def test_unknown_stop_never_resumes(make_env):
         await eventually(lambda: env.status(req.action_id), lambda s: s.state == "RUNNING")
         await env.hold(control(env))
         await eventually(lambda: env.status(req.action_id), lambda s: s.state == "UNKNOWN")
-        assert not (await env.resume(control(env, world_version=env.world.version))).accepted
+        assert not (await env.resume(control(env, state_version=env.world.version))).accepted
     finally:
         await env.close()
 

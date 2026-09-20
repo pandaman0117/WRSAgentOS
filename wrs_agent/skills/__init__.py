@@ -8,9 +8,10 @@ from hashlib import sha256
 from importlib.resources import files
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
-from wrs_agent.schemas import Boundary, Empty, Name, RobotData, SpeechData
+from wrs_agent.errors import AgentError
+from wrs_agent.schemas import Boundary, Empty, Name, RobotData, SkillVersion, SpeechData
 
 
 class MoveArgs(Boundary):
@@ -31,7 +32,7 @@ class SpeakArgs(Boundary):
 
 class SkillSpec(Boundary):
     name: Name
-    version: int = 1
+    version: SkillVersion = 1
     description: str
     instructions: str = Field(default="", max_length=8192)
     aliases: list[str] = Field(default_factory=list)
@@ -222,9 +223,22 @@ SKILLS = {
 
 def validate_skill(name, version, args, *, registry=None):
     entry = (SKILLS if registry is None else registry).get(name)
-    if entry is None or version != entry.spec.version:
-        raise ValueError("unknown_skill_or_version")
-    return entry.arguments.model_validate(args)
+    if entry is None:
+        raise AgentError("unknown_skill")
+    if version != entry.spec.version:
+        raise AgentError("skill_version_mismatch")
+    try:
+        return entry.arguments.model_validate(args)
+    except ValidationError:
+        raise AgentError("invalid_arguments") from None
+
+
+def require_contract(name, version, offered, *, node_id=None, stage=None):
+    """Check a provider's version declaration, without copying its argument schema."""
+    if name not in offered:
+        raise AgentError("skill_not_on_node", node_id=node_id, stage=stage)
+    if offered[name] != version:
+        raise AgentError("skill_version_mismatch", node_id=node_id, stage=stage)
 
 
 def registry_signature():
@@ -254,6 +268,7 @@ def lookup_skills(query, capabilities, bindings, *, limit=8):
         name
         for name, entry in sorted(SKILLS.items())
         if (cap := capabilities.get(bindings.get(name))) is not None
+        and cap.skills.get(name) == entry.spec.version
         and set(entry.spec.required_capabilities).issubset(cap.skills)
     )
     names = _rank_candidates(query.casefold().strip(), registry_signature(), available)

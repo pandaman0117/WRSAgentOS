@@ -2,16 +2,18 @@
 
 import asyncio
 import json
+from pathlib import Path
 
-from wrs_agent.nodes.actions import action_request
 from wrs_agent.processes import LocalStack
 from wrs_agent.transport import decode
+
+BINDINGS = Path(__file__).resolve().parents[2] / "configs/robot.toml"
 
 
 async def main():
     # LocalStack 是本机启动工具。进入 async with 时，它启动 router 和 Mock 机器人，
     # 等它们就绪；退出时关闭连接并清理自己启动的进程。本例不启动 Agent、TTS 或 Voice。
-    async with LocalStack(bindings="configs/robot.toml") as stack:
+    async with LocalStack(bindings=BINDINGS) as stack:
         print("1. 已启动消息转送程序和 Mock 机器人；当前脚本负责发请求、收消息。")
         # bus 是当前脚本里的通信对象；client 用它向另一个进程中的机器人发送请求。
         # 此例专门演示协议消息；普通动作脚本使用 system.action 即可。
@@ -29,10 +31,10 @@ async def main():
         print("3. 两个订阅者已登记，都准备接收机器人发出的动作通知。")
 
         # observe 是让 Mock 更新观察状态，本例不要求机械臂运动。
-        # context 取得当前状态和短期执行凭证；action_request 将它们装进动作请求。
+        # context 取得当前状态和短期执行凭证；客户端负责组装消息合同。
         context = await client.context()
-        request = action_request(context, "observe", {}, task_id="roundtrip")
-        receipt = await client.submit(request)
+        action = await client.submit("observe", {}, context=context, task_id="roundtrip")
+        request, receipt = action.request, action.receipt
         assert receipt.accepted
         print("4. 脚本请求：观察一次。机器人已接收，动作编号：", request.action_id)
 

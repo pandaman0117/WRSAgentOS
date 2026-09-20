@@ -17,14 +17,14 @@ def context():
             captured_at_ns=1,
             boot_id="boot",
             control_epoch=0,
-            world_version=0,
+            state_version=0,
             admission="OPEN",
             active_action=None,
             stop_confirmed=True,
             data=RobotData(objects={"A": "table", "D": "table"}, facts={"calibration": "v1"}),
         )
     }
-    caps = {"wrs": CapabilitySnapshot(skills=list(BINDINGS))}
+    caps = {"wrs": CapabilitySnapshot(skills=dict.fromkeys(BINDINGS, 1))}
     return worlds, caps
 
 
@@ -64,7 +64,7 @@ def test_strict_hit_unrelated_change_new_authority_and_no_cached_grants():
         update={
             "boot_id": "new-boot",
             "control_epoch": 8,
-            "world_version": 10,
+            "state_version": 10,
             "data": worlds["wrs"].data.model_copy(update={"objects": {"A": "table", "D": "C"}}),
         }
     )
@@ -95,7 +95,7 @@ def test_applicability_change_rejects(change, monkeypatch):
             update={"data": world.data.model_copy(update={"facts": {"calibration": "v2"}})}
         )
     elif change == "capabilities":
-        caps["wrs"] = CapabilitySnapshot(skills=["observe"])
+        caps["wrs"] = CapabilitySnapshot(skills={"observe": 1})
     elif change == "held":
         worlds["wrs"] = world.model_copy(
             update={"data": world.data.model_copy(update={"held_object": "A"})}

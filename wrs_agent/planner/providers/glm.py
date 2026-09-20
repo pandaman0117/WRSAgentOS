@@ -7,6 +7,7 @@ from typing import Literal
 import httpx
 from pydantic import Field
 
+from wrs_agent.errors import AgentError
 from wrs_agent.planner import PlanDecision
 from wrs_agent.planner.providers import ModelReply, ModelRequest
 from wrs_agent.schemas import MAX_BYTES, Boundary, decode, encode
@@ -36,8 +37,14 @@ class GLMConfig(Boundary):
         )
 
 
-class GLMError(ValueError):
-    """Safe public error code; excludes HTTP bodies, headers and credentials."""
+class GLMError(AgentError):
+    """Safe provider code survives Runtime/RPC without HTTP bodies or credentials."""
+
+    def __init__(self, code):
+        super().__init__(code, stage="planning")
+
+    def __str__(self):
+        return self.code
 
 
 def request_body(request: ModelRequest, config: GLMConfig) -> dict:

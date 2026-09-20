@@ -43,6 +43,8 @@ def applicability(intent, worlds, capabilities, bindings):
     world, cap = worlds.get(node_name), capabilities.get(node_name)
     if world is None or cap is None or not set(TRANSFER).issubset(cap.skills):
         return None, "capability_missing"
+    if any(cap.skills[name] != SKILLS[name].spec.version for name in TRANSFER):
+        return None, "skill_version_mismatch"
     if world.admission != "OPEN" or not world.stop_confirmed or world.active_action:
         return None, "state_not_ready"
     if world.data.held_object is not None:

@@ -13,7 +13,7 @@ from wrs_agent.transport import Inbox, loopback_config
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("schema_version", 2),
+        ("schema_version", 1),
         ("priority", "CONTROL"),
         ("source", "../operator"),
         ("auth", "short"),

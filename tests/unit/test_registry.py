@@ -57,7 +57,7 @@ def speaker(boot="first", **changes):
         boot_id=boot,
         ready=True,
         health="ready",
-        skills=["speak"],
+        skills={"speak": 1},
         capabilities=["speak"],
     ).model_copy(update=changes)
 
@@ -76,7 +76,7 @@ async def test_registry_presence_offline_restart_and_explicit_binding():
     assert not hasattr(view, "checked")  # No local heartbeat/expiry authority remains.
     bus.emit("first", False)
     assert view.snapshot()["speaker"]["health"] == "offline"
-    with pytest.raises(ValueError, match="not_ready"):
+    with pytest.raises(ValueError, match="node_unavailable"):
         view.node_for("speak")
     bus.info = None
     before = bus.queries
@@ -100,7 +100,7 @@ async def test_presence_is_not_readiness_and_capability_cache_tracks_instance():
     async def capabilities():
         nonlocal calls
         calls += 1
-        return CapabilitySnapshot(skills=["speak"], robot_controls=False)
+        return CapabilitySnapshot(skills={"speak": 1}, robot_controls=False)
 
     client = SimpleNamespace(capabilities=capabilities)
     await view.refresh()
@@ -136,7 +136,7 @@ async def test_duplicate_instances_and_descriptor_leave_race_fail_closed():
     bus.emit("first", True)
     bus.emit("second", True)
     assert (await view.refresh())["speaker"]["health"] == "unknown"
-    with pytest.raises(ValueError, match="not_ready"):
+    with pytest.raises(ValueError, match="node_ambiguous"):
         view.node_for("speak")
     bus.emit("second", False)
     assert (await view.refresh())["speaker"]["ready"]

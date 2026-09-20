@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import eventually
+from conftest import eventually, submit_request
 
 from wrs_agent.bindings import load_bindings
 from wrs_agent.nodes.agent import register_runtime
@@ -83,11 +83,11 @@ async def test_pending_glm_does_not_block_queries_or_control():
                     boot_id=w.boot_id,
                     control_epoch=w.control_epoch,
                     lease_id=w.lease_id,
-                    world_version=w.world_version,
+                    state_version=w.state_version,
                     skill=skill,
                     args=args,
                 )
-                assert (await nodes[name].submit(action)).accepted
+                assert (await submit_request(nodes[name], action)).accepted
                 actions[name] = action
                 await eventually(
                     lambda n=name: nodes[n].status(actions[n].action_id),
@@ -171,6 +171,31 @@ async def test_invalid_glm_proposal_never_reaches_action_nodes(fault):
             assert result["active_actions"] == {} and result["action_history"] == []
             for node in nodes.values():
                 assert (await node.transport.request("request/health", {}))["executions"] == 0
+        finally:
+            await runtime.close()
+            await model.aclose()
+
+
+async def test_glm_failure_keeps_safe_provider_code_in_planning_result():
+    async with LocalStack(bindings="configs/actions.toml", duration=0.01) as stack:
+        model = GLMClient(
+            GLMConfig(model="fixture"),
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(401, text="private-provider-body")
+            ),
+        )
+        runtime = Runtime(stack.system.clients, load_bindings()[1], ModelPlanner(model))
+        try:
+            from wrs_agent.schemas import GoalRequest
+
+            await runtime.goal(GoalRequest(request_id="unauthorized-model", goal="put A in B"))
+            await runtime.planning
+            result = runtime.goal_status("unauthorized-model")
+            assert result["state"] == "FAILED"
+            assert result["error"]["code"] == "glm_http_401"
+            assert result["error"]["stage"] == "planning"
+            assert "private-provider-body" not in str(result)
+            assert not runtime.action_history
         finally:
             await runtime.close()
             await model.aclose()

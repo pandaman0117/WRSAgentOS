@@ -1,8 +1,13 @@
 """One action client and service binding; each node exposes only its supported controls."""
 
+import asyncio
 from typing import Protocol
 
+from pydantic import ValidationError
+
+from wrs_agent.errors import AgentError, error_info, from_exception
 from wrs_agent.schemas import (
+    TERMINAL,
     ActionContext,
     ActionReceipt,
     ActionRequest,
@@ -17,66 +22,168 @@ from wrs_agent.schemas import (
 )
 
 
-def action_request(context, skill, args, *, task_id, revision=0, version=1):
-    """Bind fresh receiver authorization; revision is only for legacy wire callers."""
-    return ActionRequest(
-        action_id=new_id(),
-        task_id=task_id,
-        task_revision=revision,
-        boot_id=context.boot_id,
-        control_epoch=context.control_epoch,
-        lease_id=context.lease_id,
-        world_version=context.world_version,
-        skill=skill,
-        version=version,
-        args=args,
-    )
+class ActionHandle:
+    """A submitted action. wait() returns terminal status; inspect state/verification."""
+
+    def __init__(self, client, request, receipt):
+        self.client, self.request, self.receipt = client, request, receipt
+        self.id = request.action_id
+        self._cancel_request = None
+
+    async def status(self):
+        return await self.client.status(self.id)
+
+    async def wait(self, *, timeout=10):  # noqa: ASYNC109 - bounded public wait
+        async with asyncio.timeout(timeout):
+            while True:
+                state = await self.status()
+                if state is None:
+                    raise AgentError(
+                        "execution_unknown",
+                        node_id=self.client.node_id,
+                        task_id=self.request.task_id,
+                        action_id=self.id,
+                        stage="observe",
+                    )
+                if state.state in TERMINAL:
+                    return state
+                await asyncio.sleep(0.02)
+
+    async def cancel(self):
+        """Request cancellation; receipt.phase distinguishes STOPPING from STOPPED."""
+        if self._cancel_request is None:
+            state = await self.client.snapshot(control=True)
+            self._cancel_request = ControlRequest(
+                interrupt_id=new_id(),
+                boot_id=self.request.boot_id,
+                control_epoch=state.control_epoch,
+                action_id=self.id,
+            )
+        return await self.client.cancel(self._cancel_request)
 
 
 class ActionProvider(Protocol):
     async def capabilities(self) -> CapabilitySnapshot: ...
     async def snapshot(self, *, control: bool = False) -> NodeSnapshot: ...
     async def context(self, *, control: bool = False) -> ActionContext: ...
-    async def submit(self, request: ActionRequest) -> ActionReceipt: ...
+    async def submit(self, skill, args, *, context, task_id, version=1) -> ActionHandle: ...
     async def status(self, action_id: str) -> ActionStatus | None: ...
     async def cancel(self, request: ControlRequest) -> ControlReceipt: ...
     async def control(self, kind: str, request: ControlRequest) -> ControlReceipt: ...
 
 
 class ActionClient:
-    def __init__(self, transport):
-        self.transport = transport
+    def __init__(self, transport, *, node_id=None):
+        self.transport, self.node_id = transport, node_id
+
+    async def _query(self, suffix, payload, response, *, stage, optional=False, control=False):
+        try:
+            raw = await self.transport.request(suffix, payload, control=control)
+        except Exception as exc:
+            raise AgentError(from_exception(exc, node_id=self.node_id, stage=stage)) from None
+        if raw is None and optional:
+            return None
+        try:
+            return response.model_validate(raw)
+        except ValueError:
+            raise AgentError("invalid_reply", node_id=self.node_id, stage=stage) from None
 
     async def capabilities(self):
-        return CapabilitySnapshot.model_validate(
-            await self.transport.request("request/capabilities", {})
-        )
+        return await self._query("request/capabilities", {}, CapabilitySnapshot, stage="discovery")
 
     async def snapshot(self, *, control=False):
         suffix = "request/control/snapshot" if control else "request/snapshot"
-        return NodeSnapshot.model_validate(
-            await self.transport.request(suffix, {}, control=control)
-        )
+        return await self._query(suffix, {}, NodeSnapshot, stage="observe", control=control)
 
     async def context(self, *, control=False):
-        return ActionContext.model_validate(
-            await self.transport.request("request/action/context", {}, control=control)
+        return await self._query(
+            "request/action/context", {}, ActionContext, stage="preflight", control=control
         )
 
-    async def submit(self, request):
-        return ActionReceipt.model_validate(
-            await self.transport.request("request/action/submit", request.model_dump())
+    async def submit(self, skill, args, *, context, task_id, version=1):
+        """Construct once; a missing reply is reconciled by ID, never blindly replayed."""
+        try:
+            request = ActionRequest(
+                action_id=new_id(),
+                task_id=task_id,
+                task_revision=0,
+                boot_id=context.boot_id,
+                control_epoch=context.control_epoch,
+                lease_id=context.lease_id,
+                state_version=context.state_version,
+                skill=skill,
+                version=version,
+                args=args,
+            )
+        except ValidationError:
+            raise AgentError(
+                "invalid_arguments", node_id=context.node_id, task_id=task_id, stage="preflight"
+            ) from None
+        try:
+            receipt = await self._submit(request)
+        except Exception as exc:
+            failure = from_exception(
+                exc,
+                node_id=context.node_id,
+                task_id=task_id,
+                action_id=request.action_id,
+                stage="submit",
+            )
+            if failure.code not in {
+                "request_timeout",
+                "query_error",
+                "invalid_reply",
+                "internal_error",
+            }:
+                raise AgentError(failure) from None
+            # Reconcile by the original ID; never construct or send another action.
+            try:
+                status = await self.status(request.action_id)
+            except Exception:
+                status = None
+            if status is None:
+                raise AgentError(
+                    "execution_unknown",
+                    node_id=context.node_id,
+                    task_id=task_id,
+                    action_id=request.action_id,
+                    stage="submit",
+                ) from None
+            receipt = ActionReceipt(accepted=True, status=status)
+        if not receipt.accepted:
+            raise AgentError(
+                receipt.error
+                or error_info(
+                    receipt.reason,
+                    node_id=context.node_id,
+                    task_id=task_id,
+                    action_id=request.action_id,
+                    stage="submit",
+                )
+            )
+        return ActionHandle(self, request, receipt)
+
+    async def _submit(self, request):
+        return await self._query(
+            "request/action/submit", request.model_dump(), ActionReceipt, stage="submit"
         )
 
     async def status(self, action_id):
-        result = await self.transport.request("request/action/status", {"action_id": action_id})
-        return ActionStatus.model_validate(result) if result else None
+        return await self._query(
+            "request/action/status",
+            {"action_id": action_id},
+            ActionStatus,
+            stage="observe",
+            optional=True,
+        )
 
     async def control(self, kind, request):
-        return ControlReceipt.model_validate(
-            await self.transport.request(
-                f"request/control/{kind}", request.model_dump(), control=True
-            )
+        return await self._query(
+            f"request/control/{kind}",
+            request.model_dump(),
+            ControlReceipt,
+            stage="control",
+            control=True,
         )
 
     async def cancel(self, request):

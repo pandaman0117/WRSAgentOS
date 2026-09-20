@@ -6,12 +6,14 @@ import threading
 
 import zenoh
 
-from wrs_agent.schemas import Empty, NodeInfo, new_id
-from wrs_agent.skills import SKILLS
+from wrs_agent.errors import AgentError, error_info, from_exception
+from wrs_agent.schemas import Empty, ErrorInfo, NodeInfo, new_id
+from wrs_agent.skills import SKILLS, require_contract
 
 
 def register_node(bus, node_id, node_type, executor=None):
     boot_id = executor.boot_id if executor else new_id()
+    bus.node_id = node_id
     if executor is not None:
         executor.node_id = node_id
 
@@ -25,13 +27,16 @@ def register_node(bus, node_id, node_type, executor=None):
             boot_id=boot_id,
             ready=ready,
             health="ready" if ready else executor.admission.lower(),
-            skills=cap.skills if cap else [],
+            skills=cap.skills if cap else {},
             capabilities=sorted(
                 {c for entry in executor.skills.values() for c in entry.spec.required_capabilities}
             )
             if cap
             else ["task.coordinate" if node_type == "agent" else "interaction.replay"],
             resources=cap.resources if cap else [],
+            error=None
+            if ready
+            else error_info("node_not_ready", node_id=node_id, stage="discovery"),
         ).model_dump()
 
     bus.register_handler(f"request/node/{node_id}", info)
@@ -90,8 +95,13 @@ class NodeRegistry:
             return {name: None if live is None else set(live) for name, live in self._live.items()}
 
     def check_instance(self, name, boot_id):
-        if not boot_id or self._presence().get(name) != {boot_id}:
-            raise ValueError("node_instance_changed_or_ambiguous")
+        live = self._presence().get(name)
+        if live is None or len(live) > 1:
+            raise AgentError("node_ambiguous", node_id=name, stage="discovery")
+        if not live:
+            raise AgentError("node_unavailable", node_id=name, stage="discovery")
+        if not boot_id or live != {boot_id}:
+            raise AgentError("node_instance_changed", node_id=name, stage="discovery")
 
     async def refresh(self, names=None):
         async def query(name):
@@ -123,11 +133,17 @@ class NodeRegistry:
                     definition["type"],
                     boot_id,
                 ):
-                    raise ValueError("node_identity_mismatch")
+                    raise AgentError("node_identity_mismatch", node_id=name, stage="discovery")
                 self.check_instance(name, boot_id)
-            except (TimeoutError, ValueError, RuntimeError):
+            except (TimeoutError, ValueError, RuntimeError) as exc:
                 info = NodeInfo(
-                    node_id=name, node_type=definition["type"], boot_id=boot_id, health="unknown"
+                    node_id=name,
+                    node_type=definition["type"],
+                    boot_id=boot_id,
+                    health="unknown",
+                    error=from_exception(
+                        exc, validation_code="invalid_reply", node_id=name, stage="discovery"
+                    ),
                 )
             self.entries[name] = info
 
@@ -139,26 +155,44 @@ class NodeRegistry:
         result = {}
         for name, definition in self.definitions.items():
             live = presence[name]
-            info = NodeInfo(node_id=name, node_type=definition["type"])
+            info = NodeInfo(
+                node_id=name,
+                node_type=definition["type"],
+                error=error_info("node_unavailable", node_id=name, stage="discovery"),
+            )
             if not definition["enabled"]:
-                info = info.model_copy(update={"health": "unsupported"})
+                info = info.model_copy(
+                    update={
+                        "health": "unsupported",
+                        "error": error_info("provider_not_found", node_id=name, stage="discovery"),
+                    }
+                )
             elif live is None or len(live) > 1:
-                info = info.model_copy(update={"health": "unknown"})
+                info = info.model_copy(
+                    update={
+                        "health": "unknown",
+                        "error": error_info("node_ambiguous", node_id=name, stage="discovery"),
+                    }
+                )
             elif live:
                 boot_id = next(iter(live))
                 cached = self.entries.get(name)
                 info = (
                     cached
                     if cached and cached.boot_id == boot_id
-                    else info.model_copy(update={"boot_id": boot_id, "health": "unknown"})
+                    else info.model_copy(
+                        update={
+                            "boot_id": boot_id,
+                            "health": "unknown",
+                            "error": error_info("node_not_ready", node_id=name, stage="discovery"),
+                        }
+                    )
                 )
             result[name] = info.model_dump()
         return result
 
     async def capabilities(self, name, client):
-        info = self.snapshot()[name]
-        if not info["ready"]:
-            raise ValueError("node_not_ready")
+        info = self._ready(name)
         boot_id = info["boot_id"]
         cached = self._caps.get(name)
         if cached is None or cached[0] != boot_id:
@@ -167,13 +201,33 @@ class NodeRegistry:
             self._caps[name] = (boot_id, cap)
         return self._caps[name][1]
 
-    def node_for(self, skill):
-        name = self.bindings.get(skill)
+    def _ready(self, name):
         entry = self.snapshot().get(name)
-        if not entry or not entry["ready"]:
-            raise ValueError("node_not_ready")
-        if skill not in entry["skills"] or not set(
-            SKILLS[skill].spec.required_capabilities
-        ).issubset(entry["capabilities"]):
-            raise ValueError("unsupported_skill_on_current_node")
+        if entry is None:
+            raise AgentError("provider_not_found", node_id=name, stage="discovery")
+        if not entry["ready"]:
+            error = entry.get("error")
+            raise AgentError(
+                ErrorInfo.model_validate(error)
+                if error
+                else error_info("node_not_ready", node_id=name, stage="discovery")
+            )
+        return entry
+
+    def node_for(self, skill, version=None):
+        if skill not in SKILLS:
+            raise AgentError("unknown_skill", stage="discovery")
+        name = self.bindings.get(skill)
+        if name is None:
+            raise AgentError("provider_not_found", stage="discovery")
+        entry = self._ready(name)
+        require_contract(
+            skill,
+            SKILLS[skill].spec.version if version is None else version,
+            entry["skills"],
+            node_id=name,
+            stage="discovery",
+        )
+        if not set(SKILLS[skill].spec.required_capabilities).issubset(entry["capabilities"]):
+            raise AgentError("unsupported_skill_on_current_node", node_id=name, stage="discovery")
         return name

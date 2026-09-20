@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import inspect
 import os
 
 from wrs_agent.bindings import load_bindings
@@ -19,7 +20,7 @@ from wrs_agent.schemas import Empty
 from wrs_agent.transport import Transport
 
 
-async def run_node(args):
+async def run_node(args, *, action_factory=None):
     definitions, bindings = load_bindings(args.bindings)
     node_id = args.node_id or args.role
     definition = definitions.get(node_id)
@@ -32,6 +33,7 @@ async def run_node(args):
     buses = []
     owner = None
     model = None
+    close_voice = None
     done = asyncio.Event()
     try:
 
@@ -48,7 +50,11 @@ async def run_node(args):
 
         transport = connect(target)
         if args.role in {"wrs", "tts"}:
-            if args.role == "wrs" and args.backend == "wrs_virtual":
+            if action_factory is not None:
+                owner = action_factory(args, journal)
+                if inspect.isawaitable(owner):
+                    owner = await owner
+            elif args.role == "wrs" and args.backend == "wrs_virtual":
                 from wrs_agent.env.wrs import make_wrs_environment
 
                 owner = await make_wrs_environment(journal, duration=args.duration)
@@ -74,7 +80,7 @@ async def run_node(args):
                 bindings,
             )
             clients = {
-                name: ActionClient(bus)
+                name: ActionClient(bus, node_id=name)
                 for name, bus in registry.buses.items()
                 if definitions[name]["actions"]
             }
@@ -101,7 +107,7 @@ async def run_node(args):
                     raise ValueError("voice_requires_one_node_per_role")
                 return connect(args.env_id + matches[0]["suffix"])
 
-            register_voice(
+            close_voice = register_voice(
                 transport,
                 ActionClient(role_bus("wrs")),
                 ActionClient(role_bus("tts")),
@@ -128,6 +134,8 @@ async def run_node(args):
         await done.wait()
     finally:
         try:
+            if close_voice:
+                await close_voice()
             if owner:
                 await owner.close()
             if model:
@@ -138,7 +146,7 @@ async def run_node(args):
             lock.close()
 
 
-async def main():
+async def main(*, action_factory=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("role", choices=["wrs", "agent", "tts", "voice", "launch"])
     parser.add_argument("--endpoint", default="tcp/127.0.0.1:7447")
@@ -169,6 +177,8 @@ async def main():
         ],
     )
     args = parser.parse_args()
+    if action_factory is not None and args.role not in {"tts", "wrs"}:
+        parser.error("A local action_factory is only valid for an explicit wrs/tts node.")
     if args.model_provider == "glm" and (not args.live_model or args.deferred_planner):
         parser.error("GLM requires --live-model and cannot use --deferred-planner")
     if args.duration <= 0 or args.duration > 30:
@@ -190,7 +200,7 @@ async def main():
             )
             await asyncio.Event().wait()
     else:
-        await run_node(args)
+        await run_node(args, action_factory=action_factory)
 
 
 if __name__ == "__main__":

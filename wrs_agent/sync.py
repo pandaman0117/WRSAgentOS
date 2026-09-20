@@ -3,6 +3,7 @@
 import asyncio
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 
 from wrs_agent.system import System
 
@@ -12,7 +13,7 @@ def _require_sync():
         asyncio.get_running_loop()
     except RuntimeError:
         return
-    raise RuntimeError("Use 'async with System.local()' or 'System.connect()' inside async code.")
+    raise RuntimeError("Use 'async with System.launch()' or 'System.connect()' inside async code.")
 
 
 class Action:
@@ -30,6 +31,54 @@ class Action:
 
     def cancel(self):
         return self._session._call(self._action.cancel)
+
+
+class TaskHandle:
+    def __init__(self, session, handle):
+        self._session, self._handle = session, handle
+        self.id = handle.id
+
+    def status(self):
+        return self._session._call(self._handle.status)
+
+    def wait(self, *, timeout=10):
+        return self._session._call(self._handle.wait, timeout=timeout)
+
+    def watch(self, *, timeout=10):
+        stream = self._handle.watch(timeout=timeout)
+        try:
+            while True:
+                try:
+                    state = self._session._call(anext, stream)
+                except StopAsyncIteration:
+                    return
+                yield state
+        finally:
+            if not self._session._closed:
+                self._session._call(stream.aclose)
+
+    def hold(self):
+        return self._session._call(self._handle.hold)
+
+    def replace(self, *steps):
+        return TaskHandle(self._session, self._session._call(self._handle.replace, *steps))
+
+
+class GoalHandle:
+    def __init__(self, session, handle):
+        self._session, self._handle = session, handle
+        self.request_id = handle.request_id
+
+    def _wrap(self, result):
+        return (
+            replace(result, task=TaskHandle(self._session, result.task)) if result.task else result
+        )
+
+    def status(self):
+        return self._wrap(self._session._call(self._handle.status))
+
+    def wait(self, *, timeout=10):
+        return self._wrap(self._session._call(self._handle.wait, timeout=timeout))
 
 
 class Session:
@@ -73,29 +122,28 @@ class Session:
         return self._call(self._system.skills, query)
 
     def start(self, *steps):
-        return self._call(self._system.start, *steps)
+        return TaskHandle(self, self._call(self._system.start, *steps))
 
     def goal(self, text):
-        return self._call(self._system.goal, text)
+        return GoalHandle(self, self._call(self._system.goal, text))
+
+    def planning(self, request_id):
+        return GoalHandle(self, self._system.planning(request_id))
+
+    def send_text(self, text, *, input_id=None, is_final=True, confidence=1.0):
+        return self._call(
+            self._system.send_text,
+            text,
+            input_id=input_id,
+            is_final=is_final,
+            confidence=confidence,
+        )
 
     def status(self):
         return self._call(self._system.status)
 
-    def wait(self, *, timeout=10):
-        return self._call(self._system.wait, timeout=timeout)
-
-    def watch(self, *, timeout=10):
-        stream = self._system.watch(timeout=timeout)
-        try:
-            while True:
-                try:
-                    state = self._call(anext, stream)
-                except StopAsyncIteration:
-                    return
-                yield state
-        finally:
-            if not self._closed:
-                self._call(stream.aclose)
+    def task(self, task_id):
+        return TaskHandle(self, self._system.task(task_id))
 
     def action(self, skill, **args):
         return Action(self, self._call(self._system.action, skill, **args))
@@ -113,7 +161,7 @@ class Session:
 def launch(*, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None):
     """Start configured local nodes; close owned nodes and router on exit."""
     return _session(
-        System.local(
+        System.launch(
             backend=backend,
             duration=duration,
             bindings=bindings,

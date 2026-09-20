@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from wrs_agent.processes import LocalStack
-from wrs_agent.schemas import ActionRequest, Plan, Step, new_id
+from wrs_agent.schemas import ActionReceipt, ActionRequest, Plan, Step, new_id
 
 
 async def wait_for(call, predicate, timeout=5):
@@ -77,11 +77,13 @@ async def main():
             boot_id=world.boot_id,
             control_epoch=world.control_epoch,
             lease_id=world.lease_id,
-            world_version=world.world_version,
+            state_version=world.state_version,
             skill="place",
             args={"object": "A", "target": "B"},
         )
-        rejected = await robot.submit(stale)
+        rejected = ActionReceipt.model_validate(
+            await robot.transport.request("request/action/submit", stale.model_dump())
+        )
         assert not rejected.accepted and rejected.reason == "stale_epoch"
         # 放行迟到的模型输出，验证旧规划已失效，不能重新启动动作。
         await system.agent.request("request/test/planner/release", {}, control=True)

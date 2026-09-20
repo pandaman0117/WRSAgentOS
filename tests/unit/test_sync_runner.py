@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from wrs_agent import System, launch
+from wrs_agent import launch
 from wrs_agent.sync import Session
 
 
 async def test_sync_entry_rejects_existing_event_loop_before_starting():
-    with pytest.raises(RuntimeError, match="System.local"):
+    with pytest.raises(RuntimeError, match="System.launch"):
         with launch():
             pytest.fail("synchronous entry must not start in an async caller")
 
@@ -43,16 +43,23 @@ def test_session_rejects_other_threads_and_calls_after_close():
 
 @pytest.mark.parametrize("wait_timeout", [0.01, None])
 async def test_watch_deadline_does_not_cancel_consumer_while_yielded(wait_timeout):
-    async def status():
-        return {"state": "RUNNING", "planning": "IDLE"}
+    from wrs_agent.handles import TaskHandle
+    from wrs_agent.schemas import TaskStatus
 
-    system = object.__new__(System)
-    system.status = status
-    stream = system.watch(timeout=wait_timeout)
-    assert (await anext(stream))["state"] == "RUNNING"
-    await asyncio.sleep(0.03)  # The caller must not receive an unexpected cancellation.
+    counter = 0
+
+    async def status():
+        nonlocal counter
+        counter += 1
+        return TaskStatus(task_id="a", state="RUNNING", reason=str(counter))
+
+    handle = TaskHandle(None, "a")
+    handle.status = status
+    stream = handle.watch(timeout=wait_timeout)
+    assert (await anext(stream)).state == "RUNNING"
+    await asyncio.sleep(0.03)
     if wait_timeout is None:
-        assert (await anext(stream))["state"] == "RUNNING"
+        assert (await anext(stream)).state == "RUNNING"
     else:
         with pytest.raises(TimeoutError):
             await anext(stream)
@@ -90,8 +97,8 @@ def test_local_runtime_progress_requires_its_runner_to_be_driven():
 
 @pytest.mark.parametrize("state", ["FAILED", "CANCELLED", "UNKNOWN"])
 async def test_action_wait_returns_unsuccessful_terminal_status(state):
+    from wrs_agent.nodes.actions import ActionHandle
     from wrs_agent.schemas import ActionStatus
-    from wrs_agent.system import Action
 
     result = ActionStatus(action_id="a", state=state, reason="reported by node")
 
@@ -99,16 +106,23 @@ async def test_action_wait_returns_unsuccessful_terminal_status(state):
         assert action_id == "a"
         return result
 
-    action = Action(SimpleNamespace(status=status), SimpleNamespace(action_id="a"), None)
+    action = ActionHandle(SimpleNamespace(status=status), SimpleNamespace(action_id="a"), None)
     assert await action.wait() == result
 
 
 async def test_action_wait_missing_status_raises_unknown():
-    from wrs_agent.system import Action
+    from wrs_agent.nodes.actions import ActionHandle
 
     async def status(action_id):
         return None
 
-    action = Action(SimpleNamespace(status=status), SimpleNamespace(action_id="a"), None)
-    with pytest.raises(RuntimeError, match="UNKNOWN: action_status_missing"):
+    action = ActionHandle(
+        SimpleNamespace(status=status, node_id="tts"),
+        SimpleNamespace(action_id="a", task_id="task"),
+        None,
+    )
+    with pytest.raises(ValueError, match="execution_unknown") as caught:
         await action.wait()
+    assert caught.value.error.node_id == "tts"
+    assert caught.value.error.task_id == "task"
+    assert caught.value.error.action_id == "a"

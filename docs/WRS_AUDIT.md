@@ -49,3 +49,7 @@ capabilities / snapshot / observe / move_named_pose / status / cancel / hold / r
 固定源码有 robots/end_effectors/ee_mixins.py 的模型 hold/release、manipulation/arm.py 的抓取辅助接口；本 Lite6 profile 未装配夹爪、有效目标几何与碰撞校验，因此 pick/place/物体 verify 明确 unsupported。未把模型挂接当接触成功。RRT/IK 与 GUI 未接入动作路径，实机始终拒绝。
 
 指定 venv 的科学依赖继承基础解释器 site-packages；core 不加载，WRS adapter 只读追加。完整科学依赖的干净安装仍未宣称可复现。测试/示例证据见 reports/m3.xml 和 reports/m3_example_cancel.txt。
+
+## 2026-09-18：示例配置路径
+
+从 examples/developer 使用指定解释器和绝对路径 scripts/run.py 启动 01_zenoh_roundtrip.py，复现 configs/robot.toml 被解析到示例子目录，退出码 1；证据 reports/example_paths_before.txt。仓库根目录 configs/robot.toml 实际存在，04_connect.py 的 configs/tts.toml 也受同样的工作目录依赖影响。修复限定在这两个示例，以脚本位置确定配置绝对路径；API 显式相对路径继续相对于调用者工作目录。验证：39 项现有回归、6 次跨工作目录示例和 Ruff 通过；IDE 导入路径下直接启动也通过。证据 reports/example_paths_summary.json、example_paths.xml、example_paths_ide.txt；命令与限制见 ACCEPTANCE.md 文末。

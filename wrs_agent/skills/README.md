@@ -22,6 +22,12 @@ Planner 只提出计划，Runtime 和执行节点仍检查原有结构化契约�
 自己的 FK 处理函数，不运行 Mock 处理函数。能力声明、参数校验和分派都使用节点这张表。
 启动时拒绝名字、参数 Schema 或函数不一致的注册。
 
+`spec.version` 是该技能合同的正整数版本。能力与节点目录只声明 `{"speak": 1}`，
+不复制另一份参数 Schema；绑定配置仍只选择节点。客户端、Runtime 预检和节点准入
+检查同一个版本，候选检索及计划缓存也排除版本不匹配的技能。参数或结果语义不兼容时
+提升合同版本，单纯更换兼容后端不必提升。当前为精确匹配，不自动协商或降级。
+详见 [错误与技能版本](../../docs/errors_and_versions.md)。
+
 处理函数形式为 `handler(state, args, stop, progress)`。`args` 已通过参数模型校验；
 确认后置条件后返回 bool。短 Mock 函数直接返回，长操作可以使用 async 函数，检查 stop、
 通过 progress 报告进度。阻塞的设备调用仍必须由后端隔离；取消协程不等于设备停止。
@@ -34,3 +40,5 @@ Planner 只提出计划，Runtime 和执行节点仍检查原有结构化契约�
 
 格式参考：https://agentskills.io/specification 。本地参考来源和已知限制见
 项目根目录的 `docs/api_simplification.md`；没有复制 HoloAgent 的控制脚本。
+
+自定义技能与独立节点的完整例子见 [开发交接](../../docs/DEVELOPMENT.md)：共享参数合同、静态注册、TOML 绑定、Runtime 调度及取消；运行 `./scripts/run.ps1 examples/developer/05_custom_skill.py`。

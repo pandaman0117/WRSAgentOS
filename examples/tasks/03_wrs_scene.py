@@ -33,8 +33,8 @@ def run(cancel):
         if cancel:
             # resume 只恢复接收新动作的资格，不续跑已取消动作；下面另建回 home 的任务。
             assert system.resume().accepted
-        system.start(step("move_named_pose", pose="home"))
-        assert system.wait()["state"] == "SUCCEEDED"
+        task = system.start(step("move_named_pose", pose="home"))
+        assert task.wait().state == "SUCCEEDED"
         print("PASS: real WRS virtual FK; pick/place unsupported; hardware disabled")
 
 
