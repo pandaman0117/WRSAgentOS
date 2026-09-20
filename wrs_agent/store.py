@@ -6,7 +6,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from wrs_agent.schemas import TERMINAL, ActionStatus
+from wrs_agent.schemas import TERMINAL, ActionState, ActionStatus
 
 
 class Journal:
@@ -26,7 +26,7 @@ class Journal:
                 if old.state not in TERMINAL:
                     old = old.model_copy(
                         update={
-                            "state": "UNKNOWN",
+                            "state": ActionState.UNKNOWN,
                             "reason": "environment_restarted",
                             "verification": "INCONCLUSIVE",
                             "sequence": old.sequence + 1,

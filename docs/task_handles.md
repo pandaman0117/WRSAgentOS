@@ -2,6 +2,35 @@
 
 当前保留 `context()` 和 `ActionContext`；节点仍由 TOML 配置允许，未增加自动接纳节点或技能。公开调用不再需要 `action_request()`。协议使用 `wrs/v4/{site}/{target}` 和 `Envelope.schema_version=4`，节点与客户端需要一起升级；不提供旧字段别名。
 
+## state 的字符串枚举
+
+动作、任务、规划结果的 `state` 分别使用标准库 `StrEnum`，可从包入口直接导入。编辑器可以补全成员，已有字符串比较继续有效。
+
+```python
+from wrs_agent import TaskState, launch, step
+
+with launch() as system:
+    task = system.start(step("move_named_pose", pose="B"))
+    result = task.wait()
+    if result.state == TaskState.SUCCEEDED:
+        print("任务完成")
+    print(result.state)        # SUCCEEDED
+    print(result.state.value)  # SUCCEEDED，明确取出普通字符串
+```
+
+| 返回对象 | state 类型 | 允许值 |
+|---|---|---|
+| `ActionStatus`，包含动作回执内的 status | `ActionState` | ACCEPTED、RUNNING、VERIFYING、SUCCEEDED、FAILED、CANCELLING、CANCELLED、UNKNOWN |
+| `TaskStatus` | `TaskState` | QUEUED、RUNNING、CANCELLING、SUCCEEDED、FAILED、CANCELLED、UNKNOWN |
+| `TaskCancelReceipt` | `TaskState` 的原有子集 | CANCELLING、SUCCEEDED、FAILED、CANCELLED、UNKNOWN |
+| `GoalStatus` / `GoalResult` | `GoalState` | WAITING、DONE、ANSWER、CLARIFY、FAILED、STALE、REQUIRES_CONFIRMATION |
+
+同步和异步接口返回相同枚举；任务的 `status/wait/watch` 与取消回执都保留枚举类型。根据对象选择对应枚举，不用规划的 DONE 判断任务执行成功。
+
+`result.state == "SUCCEEDED"` 仍然成立，打印及 f-string 仍显示原值。Pydantic 消息对象的 `model_dump()` 保留枚举；`model_dump(mode="json")`、`model_dump_json()`、Zenoh 和 SQLite 日志仍使用原字符串，不需要协议升级或日志迁移。未知字符串仍拒绝，不把未知拼写自动归为 UNKNOWN。
+
+`system.status()` 的 Runtime 总览和 `nodes()` 目录仍为原始字典，来自消息的状态值仍是字符串；其中 IDLE 表示尚无任务或规划，不加入任务/规划结果枚举。步骤结果的 BLOCKED/STALE、设备 admission、控制 phase、验证结果也保持各自原有合同。
+
 ## 一次动作的完整调用链
 
 普通同步脚本只需：
@@ -72,14 +101,14 @@ with launch() as system:
 `wait/watch` 超时只结束观察；关闭 watch 迭代器也不会取消任务。`timeout=None` 允许持续观察。`CANCELLING` 不是终态，等待会继续。退出 `connect()` 仅关闭客户端；退出 `launch()` 则仍会关闭它拥有的本地节点。
 
 ```python
-from wrs_agent import launch, step
+from wrs_agent import TaskState, launch, step
 
 with launch(duration=1) as system:
     task = system.start(step("move_named_pose", pose="B"))
     receipt = task.cancel()
     assert receipt.accepted, receipt
     stopped = task.wait()
-    if stopped.state == "CANCELLED":
+    if stopped.state == TaskState.CANCELLED:
         next_task = system.start(step("move_named_pose", pose="C"))
         print(next_task.wait().state)
     else:

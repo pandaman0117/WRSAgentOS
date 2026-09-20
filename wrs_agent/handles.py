@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from wrs_agent.schemas import (
     TERMINAL,
     ErrorInfo,
+    GoalState,
     GoalStatus,
     TaskCancelReceipt,
     TaskStatus,
@@ -57,7 +58,7 @@ class TaskHandle:
 @dataclass(frozen=True)
 class GoalResult:
     request_id: str
-    state: str
+    state: GoalState
     reason: str
     task: TaskHandle | None
     error: ErrorInfo | None = None
@@ -84,6 +85,6 @@ class GoalHandle:
         async with asyncio.timeout(timeout):
             while True:
                 result = await self.status()
-                if result.state != "WAITING":
+                if result.state != GoalState.WAITING:
                     return result
                 await asyncio.sleep(0.02)

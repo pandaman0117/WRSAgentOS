@@ -34,6 +34,8 @@ with launch() as system:
 | `action_id` | 已构造的动作身份；整体预检失败时为空 |
 
 `action_id` 非空只代表请求身份已确定，不代表节点已经接受或执行。`reason` 保留已有描述及恢复依据；新调用方优先检查 `error.code`。
+动作、任务、规划的 `state` 分别返回 `ActionState`、`TaskState`、`GoalState` 字符串枚举，详见 [状态枚举](task_handles.md#state-的字符串枚举)。枚举保留原有合法值；取消回执仍拒绝 QUEUED/RUNNING，未知状态仍拒绝。
+
 任务句柄返回类型化的 `TaskStatus`；`system.status()` 总览和 `system.nodes()` 仍是字典，错误字段也是序列化的同一合同。
 
 | 常见错误码 | 意义 |

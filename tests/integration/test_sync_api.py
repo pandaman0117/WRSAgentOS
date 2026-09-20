@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from wrs_agent import launch, step
+from wrs_agent import ActionState, GoalState, TaskState, launch, step
 
 pytestmark = pytest.mark.zenoh
 
@@ -11,12 +11,12 @@ def test_sync_actions_run_in_parallel_while_caller_is_idle():
     with launch(duration=0.5) as system:
         speech = system.action("speak", text="working")
         motion = system.action("move_named_pose", pose="B")
-        assert speech.receipt.status.state == motion.receipt.status.state == "ACCEPTED"
+        assert speech.receipt.status.state is motion.receipt.status.state is ActionState.ACCEPTED
         assert system.snapshot().active_action == motion.id
         assert speech.status().state in {"ACCEPTED", "RUNNING"}
         # No client event loop runs during this ordinary blocking Python call.
         time.sleep(0.7)
-        assert speech.status().state == motion.status().state == "SUCCEEDED"
+        assert speech.status().state is motion.status().state is ActionState.SUCCEEDED
         assert motion.wait().verification == "PASS"
         assert system.snapshot().data.pose == "B"
 
@@ -30,7 +30,7 @@ def test_sync_wait_timeout_and_scoped_cancel_preserve_remote_control():
             motion.wait(timeout=0.02)
         assert motion.status().state in {"ACCEPTED", "RUNNING"}
         first = speech.cancel()
-        assert first.accepted and speech.wait().state == "CANCELLED"
+        assert first.accepted and speech.wait().state is ActionState.CANCELLED
         assert speech.cancel() == first
         assert system.snapshot().control_epoch == epoch
         assert system.snapshot().active_action == motion.id
@@ -51,7 +51,8 @@ def test_sync_task_watch_dependencies_and_exception_cleanup():
             verify = step("verify", object="A", target="B", after=place)
             task = system.start(step("speak", text="hello"), observe, pick, place, verify)
             states = list(task.watch())
-            assert states[-1].state == "SUCCEEDED"
+            assert all(isinstance(status.state, TaskState) for status in states)
+            assert states[-1].state is TaskState.SUCCEEDED
             assert system.status()["planner_calls"] == 0
             assert system.snapshot().data.objects["A"] == "B"
             raise LookupError("user_script_error")
@@ -90,9 +91,10 @@ def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids():
             ack = system.goal(goal)
             assert ack.request_id
             planned = ack.wait()
-            assert planned.state == "DONE" and planned.task is not None
-            assert planned.task.wait().state == "SUCCEEDED"
+            assert planned.state is GoalState.DONE and planned.task is not None
+            assert planned.task.wait().state is TaskState.SUCCEEDED
             result = system.status()
+            assert type(result["state"]) is str  # Raw overviews keep their wire representation.
             counts.append(result["planner_calls"])
         # First run starts on the table; only the third has matching conditions.
         assert counts == [1, 2, 2, 3] and result["cache_hits"] == 1

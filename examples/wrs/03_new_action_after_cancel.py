@@ -2,7 +2,7 @@
 
 import time
 
-from wrs_agent import launch
+from wrs_agent import ActionState, launch
 
 if __name__ == "__main__":
     with launch(backend="wrs_virtual", duration=1.0) as system:
@@ -12,7 +12,7 @@ if __name__ == "__main__":
         stopped = motion.wait()
         print("旧动作：", stopped.state)
 
-        if stopped.state == "CANCELLED":
+        if stopped.state == ActionState.CANCELLED:
             receipt = system.allow_actions()
             print("允许新动作：", receipt.accepted)
             if receipt.accepted:

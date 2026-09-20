@@ -22,6 +22,8 @@ with launch() as system:
 
 `launch()` 启动并拥有本机节点，退出时关闭它们。`action()` 提交一次动作并返回句柄；`wait()` 等这一次动作结束。默认是 Mock，预期输出 SUCCEEDED 和 B。
 
+`result.state` 是 `ActionState` 字符串枚举。任务结果使用 `TaskState`，规划结果使用 `GoalState`；三者都从 `wrs_agent` 导入。可以写 `result.state == ActionState.SUCCEEDED`，打印仍显示 SUCCEEDED。
+
 ## 再增加一个概念：任务
 
 直接动作之外，`start()` 可以提交多个步骤：
@@ -48,10 +50,12 @@ with launch() as system:
 [03_cancel.py](../examples/tasks/03_cancel.py) 只展示取消后开始独立新任务：
 
 ```python
+from wrs_agent import TaskState
+
 receipt = task.cancel()
 print(receipt.accepted)
 stopped = task.wait()
-if stopped.state == "CANCELLED":
+if stopped.state == TaskState.CANCELLED:
     next_task = system.start(step("move_named_pose", pose="C"))
     print(next_task.wait().state)
 ```

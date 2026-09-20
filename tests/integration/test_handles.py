@@ -6,7 +6,7 @@ import secrets
 import pytest
 from conftest import eventually
 
-from wrs_agent import System, step
+from wrs_agent import GoalState, System, TaskState, step
 from wrs_agent.processes import LocalStack
 from wrs_agent.schemas import Plan, new_id
 from wrs_agent.transport import RemoteError
@@ -26,18 +26,19 @@ async def test_handles_cancel_and_reconnect_without_cancelling_observation(monke
             stream = first.watch()
             await anext(stream)
             await stream.aclose()
-            assert (await first.status()).state == "RUNNING"
+            assert (await first.status()).state is TaskState.RUNNING
         async with System.connect(stack.endpoint, env_id=stack.env_id) as client:
             same = client.task(first.id)
-            assert (await same.wait()).state == "SUCCEEDED"
+            assert (await same.wait()).state is TaskState.SUCCEEDED
             held = await client.start(step("move_named_pose", pose="B"))
             await eventually(client.snapshot, lambda s: s.active_action is not None)
-            assert (await held.cancel()).accepted
-            assert (await held.wait()).state == "CANCELLED"
+            receipt = await held.cancel()
+            assert receipt.accepted and receipt.state is TaskState.CANCELLING
+            assert (await held.wait()).state is TaskState.CANCELLED
             newer = await client.start(step("move_named_pose", pose="C"))
             assert newer.id != held.id
             assert (await newer.wait()).state == "SUCCEEDED"
-            assert (await held.wait()).state == "CANCELLED"
+            assert (await held.wait()).state is TaskState.CANCELLED
             assert (await same.status()).state == "SUCCEEDED"
             assert (await owner.task(newer.id).status()).state == "SUCCEEDED"
             with pytest.raises(RemoteError, match="task_not_found"):
@@ -68,9 +69,9 @@ async def test_queued_and_planning_handles_keep_their_own_identity():
         assert (await second.wait()).state == "SUCCEEDED"
         goal = await system.goal("put A in B")
         planned = await goal.wait()
-        assert planned.state == "DONE" and planned.request_id == goal.request_id
+        assert planned.state is GoalState.DONE and planned.request_id == goal.request_id
         assert planned.task is not None
-        assert (await planned.task.wait()).state == "SUCCEEDED"
+        assert (await planned.task.wait()).state is TaskState.SUCCEEDED
         third = await system.start(step("move_named_pose", pose="home"))
         assert (await third.wait()).state == "SUCCEEDED"
         assert (await goal.status()).task.id == planned.task.id

@@ -11,11 +11,14 @@ from wrs_agent.nodes.actions import ActionProvider
 from wrs_agent.planner import PlanDecision, Planner, PlanRequest
 from wrs_agent.schemas import (
     TERMINAL,
+    ActionState,
     ControlRequest,
+    GoalState,
     Plan,
     Step,
     TaskCancelRequest,
     TaskRequest,
+    TaskState,
     new_id,
 )
 from wrs_agent.skills import SKILLS, lookup_skills, require_contract, validate_skill
@@ -104,18 +107,18 @@ class Runtime:
         return self.task.task_id if self.task else None
 
     def _active(self, task):
-        return self.task is task and not self.closed and self.state == "RUNNING"
+        return self.task is task and not self.closed and self.state == TaskState.RUNNING
 
     def _planning_current(self, request_id):
         return self.planning_request_id == request_id and not self.closed
 
-    def _activate(self, task, state="RUNNING"):
+    def _activate(self, task, state=TaskState.RUNNING):
         self._save_task()
         self._stale_planning()
         self.planning_request_id = None
         self.planning_state = "IDLE"
         self.task = task
-        self.state, self.reason, self.results = state, "", {}
+        self.state, self.reason, self.results = TaskState(state), "", {}
         self.error = None
         self.active_actions.clear()
 
@@ -132,7 +135,7 @@ class Runtime:
         self._capacity()
         self.tasks[task.task_id] = {
             "task_id": task.task_id,
-            "state": "QUEUED",
+            "state": TaskState.QUEUED,
             "reason": "",
             "error": None,
             "steps": {},
@@ -141,9 +144,9 @@ class Runtime:
 
     def _save_task(self):
         if self.task is not None and self.tasks[self.task_id]["state"] not in {
-            "SUCCEEDED",
-            "FAILED",
-            "CANCELLED",
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
         }:
             self.tasks[self.task_id].update(
                 state=self.state,
@@ -166,12 +169,12 @@ class Runtime:
 
     def _stale_planning(self):
         record = self.goals.get(self.planning_request_id)
-        if record and record["state"] == "WAITING":
-            record.update(state="STALE", reason="execution_or_control_changed")
+        if record and record["state"] == GoalState.WAITING:
+            record.update(state=GoalState.STALE, reason="execution_or_control_changed")
 
     def _clear_queue(self, reason="queue_cleared_by_control"):
         for task in self.queued:
-            self.tasks[task.task_id].update(state="CANCELLED", reason=reason)
+            self.tasks[task.task_id].update(state=TaskState.CANCELLED, reason=reason)
         self.queued.clear()
 
     def snapshot(self):
@@ -219,7 +222,12 @@ class Runtime:
         duplicate = self._duplicate(request.request_id, request.model_dump())
         if duplicate is not None:
             return duplicate
-        if self.closed or self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED"}:
+        if self.closed or self.state not in {
+            "IDLE",
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        }:
             raise AgentError("task_busy")
         task = _Task.create(request.plan)
         self._remember_task(task)
@@ -237,7 +245,7 @@ class Runtime:
         plan = validate_plan(request.plan)
         if len(self.queued) >= 16:
             raise AgentError("task_queue_full")
-        if self.state != "RUNNING":
+        if self.state != TaskState.RUNNING:
             raise AgentError("enqueue_requires_active_task")
         task = _Task.create(plan)
         self._remember_task(task)
@@ -253,23 +261,29 @@ class Runtime:
             return duplicate
         if self.planner is None or (self.planning and not self.planning.done()):
             raise AgentError("planner_unavailable_or_busy")
-        if self.closed or self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED", "RUNNING"}:
+        if self.closed or self.state not in {
+            "IDLE",
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+            TaskState.RUNNING,
+        }:
             raise AgentError("task_not_available")
         self._capacity()
         self.goals[request.request_id] = {
             "request_id": request.request_id,
-            "state": "WAITING",
+            "state": GoalState.WAITING,
             "reason": "",
             "task_id": None,
             "error": None,
         }
         self._save_task()
         # Planning requests have an ID; a Task exists only after an executable plan is valid.
-        was_running = self.state == "RUNNING"
+        was_running = self.state == TaskState.RUNNING
         if not was_running:
             self.reason = ""
         self.planning_request_id = request.request_id
-        self.planning_state = "WAITING"
+        self.planning_state = GoalState.WAITING
         result = {"accepted": True, "request_id": request.request_id, "revision": 0}
         self.requests[request.request_id] = (data, result)
         self.planning = self._spawn(self._plan(request.goal, request.request_id, was_running))
@@ -309,7 +323,7 @@ class Runtime:
                 or current.admission != "OPEN"
                 or current.state_version != old.state_version
             ):
-                self.planning_state = "STALE"
+                self.planning_state = GoalState.STALE
                 return False
         return self._planning_current(request_id)
 
@@ -338,23 +352,23 @@ class Runtime:
             if not await self._plan_valid(request_id, worlds):
                 return
             if decision.kind != "execute":
-                self.planning_state = decision.kind.upper()
+                self.planning_state = GoalState(decision.kind.upper())
                 self.goals[request_id]["reason"] = decision.text
                 if not was_running:
                     self.reason = decision.text
                 return
             if was_running:
-                self.planning_state = "REQUIRES_CONFIRMATION"
+                self.planning_state = GoalState.REQUIRES_CONFIRMATION
                 return
             validated = validate_plan(decision.plan, capabilities, self.bindings)
             task = _Task.create(validated)
             self._remember_task(task)
-            self.goals[request_id].update(state="DONE", task_id=task.task_id)
+            self.goals[request_id].update(state=GoalState.DONE, task_id=task.task_id)
             self._activate(task)
-            self.planning_state = "DONE"
+            self.planning_state = GoalState.DONE
             await self._execute(task)
             if self.task is task and not self.closed:
-                if self.state == "SUCCEEDED":
+                if self.state == TaskState.SUCCEEDED:
                     self.cache.remember(goal, validated, worlds, capabilities, self.bindings)
                 else:
                     self.cache.invalidate(goal, self.reason or self.state)
@@ -371,20 +385,22 @@ class Runtime:
             if not self._planning_current(request_id):
                 return
             if not valid:
-                self.planning_state = "STALE"
+                self.planning_state = GoalState.STALE
                 return
-            self.planning_state = "FAILED"
+            self.planning_state = GoalState.FAILED
             failure = from_exception(exc, stage="planning")
             self.goals[request_id].update(reason=failure.message, error=failure.model_dump())
             self.cache.invalidate(goal, failure.code)
             if not was_running:
-                self.state, self.reason = "FAILED", failure.message
+                self.state, self.reason = TaskState.FAILED, failure.message
 
         finally:
             record = self.goals[request_id]
-            if record["state"] == "WAITING":
+            if record["state"] == GoalState.WAITING:
                 record.update(
-                    state=self.planning_state if self._planning_current(request_id) else "STALE",
+                    state=self.planning_state
+                    if self._planning_current(request_id)
+                    else GoalState.STALE,
                     reason=record["reason"]
                     or (self.reason if self._planning_current(request_id) else "planning_obsolete"),
                 )
@@ -416,7 +432,7 @@ class Runtime:
                 task.authorities[name] = (world.boot_id, world.control_epoch)
         except Exception as exc:
             if self._active(task):
-                self.state = "FAILED"
+                self.state = TaskState.FAILED
                 self._record_error(from_exception(exc, task_id=task.task_id, stage="preflight"))
                 self._clear_queue("preceding_task_did_not_succeed")
             return
@@ -476,19 +492,19 @@ class Runtime:
             return
         values = set(outcomes.values())
         self.state = (
-            "UNKNOWN"
-            if "UNKNOWN" in values
-            else "FAILED"
-            if "FAILED" in values
-            else "CANCELLED"
-            if values != {"SUCCEEDED"}
-            else "SUCCEEDED"
+            TaskState.UNKNOWN
+            if ActionState.UNKNOWN in values
+            else TaskState.FAILED
+            if ActionState.FAILED in values
+            else TaskState.CANCELLED
+            if values != {ActionState.SUCCEEDED}
+            else TaskState.SUCCEEDED
         )
-        if self.state == "SUCCEEDED":
+        if self.state == TaskState.SUCCEEDED:
             self.reason, self.error = "", None
-        if self.state != "SUCCEEDED":
+        if self.state != TaskState.SUCCEEDED:
             self._clear_queue("preceding_task_did_not_succeed")
-        if self.state == "SUCCEEDED" and self.queued and not self.closed:
+        if self.state == TaskState.SUCCEEDED and self.queued and not self.closed:
             queued = self.queued.pop(0)
             self._activate(queued)
             self._spawn(self._execute(queued))
@@ -611,7 +627,7 @@ class Runtime:
                     status = await node.status(action.action_id)
             if not self._active(task):
                 return "STALE", None, world
-            if status is None or status.state == "UNKNOWN":
+            if status is None or status.state == ActionState.UNKNOWN:
                 raise AgentError(
                     "execution_unknown",
                     node_id=node_name,
@@ -619,7 +635,7 @@ class Runtime:
                     action_id=action.action_id,
                     stage="observe",
                 )
-            if status.state == "SUCCEEDED" and status.verification != "PASS":
+            if status.state == ActionState.SUCCEEDED and status.verification != "PASS":
                 raise AgentError(
                     "execution_unknown",
                     node_id=node_name,
@@ -627,7 +643,7 @@ class Runtime:
                     action_id=action.action_id,
                     stage="observe",
                 )
-            if status.state == "FAILED":
+            if status.state == ActionState.FAILED:
                 self._record_error(
                     status.error
                     or error_info(
@@ -712,11 +728,13 @@ class Runtime:
         queued = next((task for task in self.queued if task.task_id == request.task_id), None)
         if queued is not None:
             self.queued.remove(queued)
-            self.tasks[queued.task_id].update(state="CANCELLED", reason="cancelled_before_start")
-            result = self._cancel_receipt(queued.task_id, "CANCELLED", "STOPPED")
+            self.tasks[queued.task_id].update(
+                state=TaskState.CANCELLED, reason="cancelled_before_start"
+            )
+            result = self._cancel_receipt(queued.task_id, TaskState.CANCELLED, "STOPPED")
         elif self.task is None or request.task_id != self.task_id:
             raise AgentError("stale_task", task_id=request.task_id, stage="control")
-        elif self.state in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+        elif self.state in {TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED}:
             result = self._cancel_receipt(request.task_id, self.state, "STOPPED")
         else:
             result = self._begin_cancel(self.task)
@@ -725,18 +743,18 @@ class Runtime:
 
     @staticmethod
     def _cancel_receipt(task_id, state, phase):
-        return {"task_id": task_id, "state": state, "accepted": True, "phase": phase}
+        return {"task_id": task_id, "state": TaskState(state), "accepted": True, "phase": phase}
 
     def _begin_cancel(self, task):
-        if self.state != "CANCELLING":
+        if self.state != TaskState.CANCELLING:
             self._stale_planning()
             self.planning_request_id = None
-            if self.planning_state == "WAITING":
-                self.planning_state = "STALE"
-            self.state = "CANCELLING"
+            if self.planning_state == GoalState.WAITING:
+                self.planning_state = GoalState.STALE
+            self.state = TaskState.CANCELLING
             self._clear_queue()
             self._spawn(self._finish_cancel(task))
-        return self._cancel_receipt(task.task_id, "CANCELLING", "STOPPING")
+        return self._cancel_receipt(task.task_id, TaskState.CANCELLING, "STOPPING")
 
     async def interrupt(self, request):
         """Bind the current task/planning once; retries never target later work."""
@@ -748,10 +766,10 @@ class Runtime:
             raise AgentError("runtime_closed", stage="control")
         self._stale_planning()
         self.planning_request_id = None
-        if self.planning_state == "WAITING":
-            self.planning_state = "STALE"
+        if self.planning_state == GoalState.WAITING:
+            self.planning_state = GoalState.STALE
         self._clear_queue()
-        if self.task and self.state in {"RUNNING", "CANCELLING", "UNKNOWN"}:
+        if self.task and self.state in {TaskState.RUNNING, TaskState.CANCELLING, TaskState.UNKNOWN}:
             result = self._begin_cancel(self.task)
         else:
             result = {"accepted": True, "phase": "STOPPED", "task_id": None}
@@ -782,8 +800,8 @@ class Runtime:
                         status = await self.nodes[name].status(action_id)
                     if (
                         status is None
-                        or status.state == "UNKNOWN"
-                        or (status.state == "SUCCEEDED" and status.verification != "PASS")
+                        or status.state == ActionState.UNKNOWN
+                        or (status.state == ActionState.SUCCEEDED and status.verification != "PASS")
                     ):
                         raise AgentError(
                             "execution_unknown", node_id=name, action_id=action_id, stage="control"
@@ -811,13 +829,13 @@ class Runtime:
                         ),
                     )
             if self.task is task:
-                self.state, self.results = "CANCELLED", results
+                self.state, self.results = TaskState.CANCELLED, results
                 self.reason, self.error = "cancelled_by_request", None
                 self.active_actions.clear()
                 self._save_task()
         except Exception as exc:
             if self.task is task:
-                self.state = "UNKNOWN"
+                self.state = TaskState.UNKNOWN
                 self._record_error(from_exception(exc, task_id=task.task_id, stage="control"))
                 self._save_task()
 
@@ -837,7 +855,7 @@ class Runtime:
     async def close(self):
         if self.closed:
             return
-        if self.task and self.state in {"RUNNING", "UNKNOWN"}:
+        if self.task and self.state in {TaskState.RUNNING, TaskState.UNKNOWN}:
             self._begin_cancel(self.task)
         self.closed = True
         self._stale_planning()

@@ -30,6 +30,8 @@
 | [05_goal.py](tasks/05_goal.py) | 等规划，再等执行 | DONE → SUCCEEDED |
 | [06_cache.py](tasks/06_cache.py) | 同样状态下复用计划 | 模型调用保持 1，命中 1 次 |
 
+任务结果可用 `TaskState.SUCCEEDED` 等枚举成员判断，动作和规划结果分别使用 `ActionState`、`GoalState`；打印仍显示原字符串。取消示例演示这种写法，完整约定见 [状态枚举](../docs/task_handles.md#state-的字符串枚举)。
+
 `after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。这里抓取/放置是 Mock 状态变化，目标规划是确定的 Mock 模板。
 
 ## 语音入口

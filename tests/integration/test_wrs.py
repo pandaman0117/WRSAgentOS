@@ -4,6 +4,7 @@ import sys
 import pytest
 from conftest import eventually, submit_request
 
+from wrs_agent import ActionState
 from wrs_agent.processes import LocalStack
 from wrs_agent.schemas import ActionRequest, ControlRequest, Plan, Step, decode, new_id
 
@@ -36,7 +37,7 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         request = await request_for(node, revision=2)
         subscriber = stack.system.clients["wrs"].transport.subscribe("events/action", capacity=64)
         receipt = await submit_request(node, request)
-        assert receipt.accepted and receipt.status.state == "ACCEPTED"
+        assert receipt.accepted and receipt.status.state is ActionState.ACCEPTED
         await eventually(lambda: node.status(request.action_id), lambda s: s.progress > 0)
         during = await node.snapshot()
         assert during.active_action == request.action_id
@@ -46,7 +47,7 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         result = await eventually(
             lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
         )
-        assert result.verification == "PASS"
+        assert result.state is ActionState.SUCCEEDED and result.verification == "PASS"
         final = await node.snapshot()
         assert final.data.pose == "B"
         assert final.data.kinematics.joints == pytest.approx([0.3, 0.2, 0.5, 0.0, 0.2, 0.0])

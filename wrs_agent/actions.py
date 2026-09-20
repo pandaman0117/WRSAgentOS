@@ -11,6 +11,7 @@ from wrs_agent.schemas import (
     ActionContext,
     ActionReceipt,
     ActionRequest,
+    ActionState,
     ActionStatus,
     CapabilitySnapshot,
     ControlReceipt,
@@ -62,7 +63,7 @@ class ActionExecutor:
         self.node_id = "wrs" if self.capabilities().robot_controls else "tts"
         self.admission = "HELD" if self.records and self.capabilities().robot_controls else "OPEN"
         self.stop_confirmed = True
-        if any(s.state == "UNKNOWN" for _, s in self.records.values()):
+        if any(s.state == ActionState.UNKNOWN for _, s in self.records.values()):
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
         self.duration, self.fault = duration, fault
@@ -116,7 +117,9 @@ class ActionExecutor:
         record = self.records.get(action_id)
         return record[1] if record else None
 
-    def _status(self, action_id, state, reason="", verification="PENDING", progress=None):
+    def _status(
+        self, action_id, state: ActionState, reason="", verification="PENDING", progress=None
+    ):
         request, old = self.records[action_id]
         status = ActionStatus(
             action_id=action_id,
@@ -124,13 +127,13 @@ class ActionExecutor:
             sequence=old.sequence + 1,
             progress=old.progress if progress is None else progress,
             error=error_info(
-                "execution_unknown" if state == "UNKNOWN" else "action_failed",
+                "execution_unknown" if state == ActionState.UNKNOWN else "action_failed",
                 node_id=self.node_id,
                 task_id=request["task_id"],
                 action_id=action_id,
                 stage="observe",
             )
-            if state in {"FAILED", "UNKNOWN"}
+            if state in {ActionState.FAILED, ActionState.UNKNOWN}
             else None,
             reason=reason,
             verification=verification,
@@ -146,7 +149,7 @@ class ActionExecutor:
         except Exception:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
-            self._status(action_id, "UNKNOWN", "journal_failed", "INCONCLUSIVE")
+            self._status(action_id, ActionState.UNKNOWN, "journal_failed", "INCONCLUSIVE")
             self.stop_signal.set()
             raise
 
@@ -215,7 +218,7 @@ class ActionExecutor:
         self.active = request.action_id
         self.stop_confirmed = False
         self.stop_signal = asyncio.Event()
-        status = ActionStatus(action_id=request.action_id, state="ACCEPTED")
+        status = ActionStatus(action_id=request.action_id, state=ActionState.ACCEPTED)
         self.records[request.action_id] = (data, status)
         self.runner = asyncio.create_task(self._admit_and_execute(request))
         return ActionReceipt(accepted=True, status=status)
@@ -229,7 +232,7 @@ class ActionExecutor:
             return
         reason = self._fence_reason(request)
         if reason or self.stop_signal.is_set():
-            self._status(request.action_id, "CANCELLED", reason or "held_before_start")
+            self._status(request.action_id, ActionState.CANCELLED, reason or "held_before_start")
             self.active = None
             self.stop_confirmed = self.admission != "UNKNOWN"
             self._finish_cancel()
@@ -240,7 +243,7 @@ class ActionExecutor:
     async def _execute(self, request):
         aid = request.action_id
         try:
-            self._status(aid, "RUNNING")
+            self._status(aid, ActionState.RUNNING)
             self.executions += 1
             await self._save(aid)
             args = validate_skill(
@@ -250,7 +253,7 @@ class ActionExecutor:
 
             def progress(value):
                 if not self.stop_signal.is_set():
-                    self._status(aid, "RUNNING", progress=value)
+                    self._status(aid, ActionState.RUNNING, progress=value)
                     self.on_event("state/world", self.snapshot().model_dump())
 
             if self.duration > 0:
@@ -279,22 +282,22 @@ class ActionExecutor:
                 if self.fault == "stop_unknown":
                     self.admission = "UNKNOWN"
                     self.stop_confirmed = False
-                    self._status(aid, "UNKNOWN", "stop_unconfirmed", "INCONCLUSIVE")
+                    self._status(aid, ActionState.UNKNOWN, "stop_unconfirmed", "INCONCLUSIVE")
                 else:
                     self.stop_confirmed = True
-                    self._status(aid, "CANCELLED", "controlled_stop")
+                    self._status(aid, ActionState.CANCELLED, "controlled_stop")
                 return
             if self.fault in {"unknown", "inconclusive"}:
                 self.admission = "UNKNOWN"
                 self.stop_confirmed = False
-                self._status(aid, "UNKNOWN", "observation_inconclusive", "INCONCLUSIVE")
+                self._status(aid, ActionState.UNKNOWN, "observation_inconclusive", "INCONCLUSIVE")
                 return
             self.world.version += 1
-            self._status(aid, "VERIFYING")
+            self._status(aid, ActionState.VERIFYING)
             # No await between virtual effect and verification: one state owner.
             self._status(
                 aid,
-                "SUCCEEDED" if verified else "FAILED",
+                ActionState.SUCCEEDED if verified else ActionState.FAILED,
                 "" if verified else "postcondition_failed",
                 "PASS" if verified else "FAIL",
                 progress=1.0,
@@ -302,22 +305,22 @@ class ActionExecutor:
         except asyncio.CancelledError:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
-            self._status(aid, "UNKNOWN", "worker_cancelled", "INCONCLUSIVE")
+            self._status(aid, ActionState.UNKNOWN, "worker_cancelled", "INCONCLUSIVE")
             raise
         except SkillFailure as exc:
-            self._status(aid, "FAILED", str(exc), "FAIL")
+            self._status(aid, ActionState.FAILED, str(exc), "FAIL")
         except ExecutionUnknown:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
-            self._status(aid, "UNKNOWN", "backend_state_unknown", "INCONCLUSIVE")
+            self._status(aid, ActionState.UNKNOWN, "backend_state_unknown", "INCONCLUSIVE")
         except Exception:
-            if self.status(aid).state != "UNKNOWN":
-                self._status(aid, "FAILED", "precondition_or_execution_failed", "FAIL")
+            if self.status(aid).state != ActionState.UNKNOWN:
+                self._status(aid, ActionState.FAILED, "precondition_or_execution_failed", "FAIL")
         finally:
-            if self.status(aid).state in {"SUCCEEDED", "FAILED"}:
+            if self.status(aid).state in {ActionState.SUCCEEDED, ActionState.FAILED}:
                 self.stop_confirmed = True
             self.active = None
-            if self.status(aid).state == "CANCELLED":
+            if self.status(aid).state == ActionState.CANCELLED:
                 self._finish_cancel()
             with contextlib.suppress(Exception):
                 await self._save(aid)
@@ -386,7 +389,7 @@ class ActionExecutor:
             self.stop_confirmed = self.active is None and self.admission != "UNKNOWN"
             self.stop_signal.set()
             if self.active:
-                self._status(self.active, "CANCELLING")
+                self._status(self.active, ActionState.CANCELLING)
             else:
                 self._finish_cancel()
             result = receipt(

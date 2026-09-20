@@ -106,7 +106,7 @@ UI 可使用 `System.connect()` 的异步入口，使等待任务进度与用户
 | 重连观察 | `task(task_id)`、`planning(request_id)` |
 | 任务进度/取消 | 句柄的 `status/watch/wait/cancel` |
 
-状态结果主要是类型化对象；`system.status()` 的 Runtime 总览、`nodes()` 目录仍为字典。不要假设每个返回值都有相同字段。错误读取 error.code，UNKNOWN 要保留并显示。浏览器项目可随后在独立服务中包装这些 API；本轮不引入 Web 框架、前端依赖或新的控制协议。
+动作/任务/规划结果的 state 分别为 ActionState、TaskState、GoalState，可从 wrs_agent 导入；使用字符串枚举，消息中的字符串值不变。状态结果主要是类型化对象；`system.status()` 的 Runtime 总览、`nodes()` 目录仍为字典。不要假设每个返回值都有相同字段。错误读取 error.code，UNKNOWN 要保留并显示。浏览器项目可随后在独立服务中包装这些 API；本轮不引入 Web 框架、前端依赖或新的控制协议。
 
 ## GLM：完整软件路径已接好
 

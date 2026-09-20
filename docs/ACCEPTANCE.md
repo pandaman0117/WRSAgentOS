@@ -427,3 +427,20 @@ git diff --check
 验证环境：Python 3.12.0；eclipse-zenoh / zenohd 1.9.0；Pydantic 2.13.5；pytest 9.1.1；pytest-asyncio 1.4.0；Ruff 0.16.8。WRS gitlink 仍为 `2bb014b747833c2fd9345115fbe26ffb11376f20`，submodule 无改动；WRS 探测依赖 numpy 1.26.4、scipy 1.16.2、mujoco 3.5.0、wgpu 0.32.0、websockets 15.0.1。未变更依赖或锁文件。
 
 本次软件和示例无剩余阻塞。WRS 抓放、硬件、真实 GLM、真实 ASR/音频、独立 Vision、双机保护配置和性能仍未验证；默认无录音和权重下载。context、Blueprint、动态接纳继续留待讨论。交接下一入口为 `examples/nodes/greet_skill.py`、`examples/nodes/01_start_speaker.py` 和 `docs/DEVELOPMENT.md`。沿用用户选择，只保留本地提交，不上传。
+
+
+## 2026-09-20：state 字符串枚举
+
+公开导出 ActionState、TaskState、GoalState（Python 标准库 StrEnum）。ActionStatus、TaskStatus、TaskCancelReceipt、GoalStatus 和 GoalResult 返回对应枚举；Runtime / ActionExecutor 使用枚举成员表达状态变化，Journal 重启恢复显式写入 ActionState.UNKNOWN。TaskCancelReceipt 仍只允许原有五个状态，不放宽为所有 TaskState。
+
+保持原字符串值、协议 v4、JSON 和 SQLite 文本格式。状态边界只转换合法字符串，Boundary 的 strict=True 保留，其他字段不放宽。model_dump() 保留枚举，mode="json" / model_dump_json() 仍输出字符串；旧字符串比较、打印、哈希查找可继续使用。Runtime 总览与节点目录保持原始字典；IDLE、步骤结果、控制 phase 和设备 admission 不纳入这三个结果枚举。
+
+实际执行 `./scripts/run.ps1 scripts/verify.py --wrs`：**390 passed = 320 unit + 65 Zenoh/Mock + 5 WRS virtual**，0 failures/errors/skipped；23 份离线示例逐份通过，配对服务/客户端测试通过，Ruff、doctor、git diff --check 和修改文档的本地链接检查通过。verify 报告为 28 项 PASS、0 FAIL、7 项 UNVERIFIED。
+
+新增 77 项参数化兼容性检查，覆盖所有原状态值从 Python 字典/JSON 解码、枚举身份、嵌套回执、原字符串比较与序列化、精确 Schema 合法值、无效/跨域状态、取消回执子集、其他字段严格验证及旧 SQLite 日志恢复。既有真实 Zenoh 同步/异步、watch、重连、取消、规划、WRS 测试增加枚举身份断言，同时保留既有字符串断言验证兼容。
+
+开发首轮直接将枚举类传入 BeforeValidator，触发 Pydantic validator-signature 导入错误；改为显式单参数转换后，合同/执行器重点组 31 passed，枚举/Runtime/取消重点组 98 passed，随后上述完整验收通过。没有调整全局 use_enum_values、关闭 strict 或跳过失败用例。
+
+证据：本地 reports/state_enums_summary.json、acceptance.json、unit.xml、zenoh.xml、wrs.xml、example_*.txt 与 doctor.json。环境仍为 Python 3.12.0、Pydantic 2.13.5、Zenoh/router 1.9.0、pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；依赖、锁文件、WRS gitlink 未变。真实硬件/GLM/ASR/音频没有调用，既有未验证范围未改变。
+
+本次无剩余实现阻塞；用法见 [状态枚举](task_handles.md#state-的字符串枚举) 和两个更新的取消示例。WRS backend 接口的待澄清项不影响本改动，也未因此连接其他 backend。沿用用户选择，只本地提交，不上传。

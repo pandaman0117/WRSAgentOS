@@ -35,6 +35,8 @@ with launch() as system:
 
 动作、任务与规划都有各自句柄。`status()` 查询一次，`wait()` 等终态，`watch()` 观察进度；任务或动作的 `cancel()` 返回受理结果，停止完成另行确认。取消结束后可以 `start()` 一个独立新任务，旧句柄始终保留原身份。
 
+结果的 `state` 分别为 `ActionState`、`TaskState`、`GoalState` 字符串枚举，例如 `from wrs_agent import TaskState` 后用 `result.state == TaskState.SUCCEEDED`。原来的字符串比较与 JSON 值不变，详见 [状态枚举](docs/task_handles.md#state-的字符串枚举)。
+
 `launch()` 拥有并管理本机节点；`connect()` 连接已经运行的节点，客户端退出不会关闭服务。同步脚本用 `launch/connect`，异步应用用 `System.launch/System.connect`。UI 应使用异步接口，避免等待阻塞界面。
 
 `send_text()` 接收 UI 文字或 ASR 已识别文本。明确停止经过独立 Voice 节点与本地控制路径，不等待模型；当前没有真实麦克风或 ASR 后端。

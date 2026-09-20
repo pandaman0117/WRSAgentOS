@@ -1,27 +1,51 @@
 """Strict, bounded JSON contracts. No device or provider objects cross this boundary."""
 
 import json
+from enum import StrEnum
 from graphlib import TopologicalSorter
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 MAX_BYTES = 65536
 Name = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")]
 Counter = Annotated[int, Field(ge=0, le=2**53)]
 SkillVersion = Annotated[int, Field(ge=1, le=2**31 - 1)]
 Scalar = str | int | float | bool | None
-State = Literal[
-    "ACCEPTED",
-    "RUNNING",
-    "VERIFYING",
-    "SUCCEEDED",
-    "FAILED",
-    "CANCELLING",
-    "CANCELLED",
-    "UNKNOWN",
-]
+
+
+class ActionState(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    RUNNING = "RUNNING"
+    VERIFYING = "VERIFYING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+
+
+class TaskState(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    CANCELLING = "CANCELLING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+
+
+class GoalState(StrEnum):
+    WAITING = "WAITING"
+    DONE = "DONE"
+    ANSWER = "ANSWER"
+    CLARIFY = "CLARIFY"
+    FAILED = "FAILED"
+    STALE = "STALE"
+    REQUIRES_CONFIRMATION = "REQUIRES_CONFIRMATION"
+
+
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"}
 
 
@@ -93,7 +117,8 @@ class ActionRequest(Boundary):
 
 class ActionStatus(Boundary):
     action_id: Name
-    state: State
+    # JSON/dict inputs still carry strings; keep the validated Python result as an enum.
+    state: Annotated[ActionState, BeforeValidator(lambda value: ActionState(value))]
     sequence: Counter = 0
     progress: float = Field(default=0.0, ge=0, le=1)
     reason: Annotated[str, Field(max_length=240)] = ""
@@ -260,9 +285,7 @@ class GoalQuery(Boundary):
 
 class TaskStatus(Boundary):
     task_id: Name
-    state: Literal[
-        "QUEUED", "RUNNING", "CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"
-    ]
+    state: Annotated[TaskState, BeforeValidator(lambda value: TaskState(value))]
     reason: str = ""
     steps: dict[str, str] = Field(default_factory=dict)
     active_actions: dict[str, str] = Field(default_factory=dict)
@@ -272,7 +295,16 @@ class TaskStatus(Boundary):
 class TaskCancelReceipt(Boundary):
     task_id: Name
     revision: Literal[0] = 0
-    state: Literal["CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"]
+    state: Annotated[
+        Literal[
+            TaskState.CANCELLING,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+            TaskState.UNKNOWN,
+        ],
+        BeforeValidator(lambda value: TaskState(value)),
+    ]
     accepted: bool
     phase: Literal["STOPPING", "STOPPED", "UNKNOWN"]
     error: ErrorInfo | None = None
@@ -280,9 +312,7 @@ class TaskCancelReceipt(Boundary):
 
 class GoalStatus(Boundary):
     request_id: Name
-    state: Literal[
-        "WAITING", "DONE", "ANSWER", "CLARIFY", "FAILED", "STALE", "REQUIRES_CONFIRMATION"
-    ]
+    state: Annotated[GoalState, BeforeValidator(lambda value: GoalState(value))]
     reason: str = ""
     task_id: Name | None = None
     error: ErrorInfo | None = None
