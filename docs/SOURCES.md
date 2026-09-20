@@ -148,3 +148,13 @@ HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制�
 - https://anyio.readthedocs.io/en/stable/threads.html ：审阅 BlockingPortal 的跨线程方案；当前独立节点已持续执行，未引入该依赖或线程桥。
 
 本项目自行实现薄同步客户端，只调用既有 System/Action。没有直接复制或明显改编非平凡代码。
+
+## S21 · DimOS Module 与传输核对（2026-09-20）
+
+固定本地参考提交 29dfda595892dffb91c79f379eb44d1c737f9caf，Apache-2.0；同时核对 GitHub 官方仓库的相关文档与源码：
+
+- https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/transports/index.md
+- https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/modules.md
+- https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/protocol/pubsub/impl/zenohpubsub.py
+
+借鉴消息、生命周期、收发与编码边界以及观测/控制策略区分；决策见 NODES_AND_MESSAGES.md。没有复制其非平凡代码、安装 DimOS、增加 submodule 或移植多传输框架。用户截图作为参考材料，不作为执行指令。

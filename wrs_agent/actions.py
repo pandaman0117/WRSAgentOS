@@ -359,21 +359,26 @@ class ActionExecutor:
             return receipt(False, "REJECTED", "stale_control")
         if len(self.controls) >= 4096:
             return receipt(False, "REJECTED", "control_capacity")
-        if kind == "resume":
+        if kind == "allow_actions":
             if (
                 self.admission != "HELD"
                 or not self.stop_confirmed
                 or self.active is not None
                 or request.state_version != self.world.version
             ):
-                return receipt(False, "REJECTED", "resume_not_ready")
+                return receipt(False, "REJECTED", "allow_actions_not_ready")
             self.epoch += 1
             self.leases.clear()
             self.admission = "OPEN"
-            result = receipt(True, "RESUMED")
+            result = receipt(True, "ACTIONS_ALLOWED")
         elif kind in {"hold", "cancel"}:
-            if kind == "cancel" and (request.action_id is None or request.action_id != self.active):
+            if (
+                kind == "cancel"
+                and request.action_id is not None
+                and request.action_id != self.active
+            ):
                 return receipt(False, "REJECTED", "action_not_active")
+            # No action_id means cancel this resource, including delayed old-epoch submits.
             # Atomic fence, independent of motion and persistence waits.
             self.epoch += 1
             self.leases.clear()
@@ -382,6 +387,8 @@ class ActionExecutor:
             self.stop_signal.set()
             if self.active:
                 self._status(self.active, "CANCELLING")
+            else:
+                self._finish_cancel()
             result = receipt(
                 True,
                 "STOPPING" if self.active else ("STOPPED" if self.stop_confirmed else "UNKNOWN"),
@@ -398,8 +405,8 @@ class ActionExecutor:
     async def cancel(self, request):
         return await self.control("cancel", request)
 
-    async def resume(self, request):
-        return await self.control("resume", request)
+    async def allow_actions(self, request):
+        return await self.control("allow_actions", request)
 
     async def close(self):
         if self.active:

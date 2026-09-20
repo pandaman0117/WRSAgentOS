@@ -23,8 +23,8 @@ def test_tts_only_launch_and_another_program_connects(monkeypatch):
         boot = system.snapshot("tts").boot_id
         with pytest.raises(ValueError, match="node_role_not_configured"):
             system.status()
-        with pytest.raises(ValueError, match="robot_resume_unsupported"):
-            system.resume("tts")
+        with pytest.raises(ValueError, match="robot_allow_actions_unsupported"):
+            system.allow_actions("tts")
         result = subprocess.run(
             python_command(
                 "examples/tasks/04_connect.py",

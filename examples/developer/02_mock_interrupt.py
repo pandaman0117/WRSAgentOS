@@ -41,7 +41,7 @@ async def main():
             ]
         )
         # request_id 用于请求去重；确定计划后由 Runtime 生成不可变的 task_id。
-        await system.start(*plan.steps)
+        task = await system.start(*plan.steps)
         running = await wait_for(
             system.status,
             lambda s: len(s["active_actions"]) == 2,
@@ -59,13 +59,10 @@ async def main():
         query = await system.replay("query")
         assert query["task"]["state"] == "RUNNING"
         assert (await robot.snapshot()).control_epoch == world.control_epoch
-        # 任务级控制必须指明 task_id，避免迟到请求误停替换后的任务。
-        held = await system.agent.request(
-            "request/task/hold",
-            {"request_id": new_id(), "task_id": running["task_id"]},
-            control=True,
-        )
-        assert held["accepted"]
+        # 任务级控制必须指明 task_id，避免迟到请求误停后来的任务。
+        receipt = await task.cancel()
+        assert receipt.accepted
+        assert (await task.wait()).state == "CANCELLED"
         # 受理停止不代表已经停稳；确认停止后仍保持持物，取消不会撤销已发生的抓取。
         stopped = await wait_for(robot.snapshot, lambda w: w.stop_confirmed)
         assert stopped.data.held_object == "A"
@@ -100,24 +97,12 @@ async def main():
                 ),
             ]
         )
-        # 替换创建新任务；旧 task_id 指定被替换对象，supersedes 保留两次执行的关联。
-        await system.agent.request(
-            "request/task/replace",
-            {
-                "request_id": new_id(),
-                "task_id": running["task_id"],
-                "replacement": remaining.model_dump(),
-            },
-            control=True,
-        )
-        final = await wait_for(
-            system.status,
-            lambda s: s["state"] in {"SUCCEEDED", "FAILED", "UNKNOWN"},
-        )
+        # 原任务已结束；按当前状态创建独立任务，没有替换或续跑关系。
+        next_task = await system.start(*remaining.steps)
+        final = await next_task.wait()
         state = await robot.snapshot()
-        assert final["task_id"] != running["task_id"]
-        assert final["supersedes"] == running["task_id"]
-        assert final["state"] == "SUCCEEDED", final
+        assert final.task_id != running["task_id"]
+        assert final.state == "SUCCEEDED", final
         assert state.data.objects["A"] == "C" and state.data.held_object is None
         print(
             json.dumps(
@@ -129,9 +114,9 @@ async def main():
                     "query_during_motion": True,
                     "held_after_stop": stopped.data.held_object,
                     "old_action_rejected": rejected.reason,
-                    "late_model": "rejected_before_replacement",
-                    "replacement_has_new_id": final["task_id"] != running["task_id"],
-                    "final_task": final["state"],
+                    "late_model": "rejected_before_new_task",
+                    "new_task_has_new_id": final.task_id != running["task_id"],
+                    "final_task": final.state,
                     "final_A_location": state.data.objects["A"],
                     "verification": "virtual_state",
                 },

@@ -223,14 +223,16 @@ def register_actions(transport, executor):
 
     transport.register_handler("request/health", health)
     transport.register_handler("request/capabilities", capabilities)
-    # Observation never grants authority; TTS has no hold/resume service.
+    # Observation never grants authority; TTS has no hold/allow_actions service.
     transport.register_handler("request/action/context", context, control=True)
     transport.register_handler("request/snapshot", snapshot)
     transport.register_handler("request/control/snapshot", snapshot, control=True)
     transport.register_handler("request/action/submit", submit)
     transport.register_handler("request/action/status", status)
     controls = (
-        ("hold", "cancel", "resume") if executor.capabilities().robot_controls else ("cancel",)
+        ("hold", "cancel", "allow_actions")
+        if executor.capabilities().robot_controls
+        else ("cancel",)
     )
     for kind in controls:
 

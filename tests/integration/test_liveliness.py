@@ -100,7 +100,7 @@ async def test_held_presence_is_not_permission_and_offline_tts_is_not_queried(mo
         assert held["wrs"]["health"] == "held" and not held["wrs"]["ready"]
         with pytest.raises(ValueError, match="node_not_ready"):
             await system.action("move_named_pose", pose="B")
-        assert (await system.resume()).accepted
+        assert (await system.allow_actions()).accepted
         worker = system._local_stack.processes[2]
         worker.terminate()
         await asyncio.to_thread(worker.wait, timeout=3)

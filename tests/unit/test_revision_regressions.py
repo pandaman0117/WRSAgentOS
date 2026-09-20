@@ -8,7 +8,7 @@ from wrs_agent.bindings import load_bindings
 from wrs_agent.nodes.tts import make_mock_tts
 from wrs_agent.nodes.voice import register_voice
 from wrs_agent.runtime import Runtime
-from wrs_agent.schemas import ActionStatus, Plan, Step, TaskControl, TaskRequest
+from wrs_agent.schemas import ActionStatus, Plan, Step, TaskCancelRequest, TaskRequest
 
 
 @pytest.mark.parametrize("change", ["restart", "epoch"])
@@ -43,7 +43,7 @@ async def test_entire_plan_binds_before_first_branch(make_env, tmp_path, change)
         await speech.close()
 
 
-async def test_hold_replace_ignore_unrelated_offline_node(make_env):
+async def test_cancel_then_start_ignore_unrelated_offline_node(make_env):
     env = make_env(duration=0.1)
 
     class Offline:
@@ -57,11 +57,12 @@ async def test_hold_replace_ignore_unrelated_offline_node(make_env):
     try:
         first = await runtime.start(TaskRequest(request_id="start", plan=motion()))
         await eventually(env.snapshot, lambda s: s.active_action is not None)
-        receipt = await runtime.hold(TaskControl(request_id="hold", task_id=first["task_id"]))
-        assert receipt["accepted"]
-        await runtime.replace(
-            TaskControl(request_id="replace", task_id=first["task_id"], replacement=motion("C"))
+        receipt = await runtime.cancel(
+            TaskCancelRequest(request_id="hold", task_id=first["task_id"])
         )
+        assert receipt["accepted"]
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
+        await runtime.start(TaskRequest(request_id="next", plan=motion("C")))
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         assert env.world.pose == "C"
     finally:
@@ -159,7 +160,7 @@ async def test_voice_retry_and_concurrent_duplicates_share_control(make_env, fai
         await env.close()
 
 
-async def test_task_history_survives_queue_replace_and_returns_detached_results(make_env):
+async def test_task_history_survives_queue_cancel_and_returns_detached_results(make_env):
     env = make_env(duration=0.08)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1])
     try:
@@ -176,15 +177,14 @@ async def test_task_history_survives_queue_replace_and_returns_detached_results(
         assert runtime.task_status(first["task_id"])["steps"] == {"move": "SUCCEEDED"}
         third = await runtime.start(TaskRequest(request_id="three", plan=motion()))
         discarded = await runtime.enqueue(TaskRequest(request_id="four", plan=motion("C")))
-        await runtime.hold(TaskControl(request_id="hold", task_id=third["task_id"]))
-        assert runtime.task_status(third["task_id"])["state"] == "HELD"
+        await runtime.cancel(TaskCancelRequest(request_id="hold", task_id=third["task_id"]))
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
+        assert runtime.task_status(third["task_id"])["state"] == "CANCELLED"
         assert runtime.task_status(discarded["task_id"])["state"] == "CANCELLED"
-        replaced = await runtime.replace(
-            TaskControl(request_id="replace", task_id=third["task_id"], replacement=motion("C"))
-        )
+        newer = await runtime.start(TaskRequest(request_id="next", plan=motion("C")))
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         assert runtime.task_status(third["task_id"])["state"] == "CANCELLED"
-        assert runtime.task_status(replaced["task_id"])["supersedes"] == third["task_id"]
+        assert newer["task_id"] != third["task_id"]
         fresh_runtime = Runtime({}, {})
         with pytest.raises(ValueError, match="task_not_found"):
             fresh_runtime.task_status(first["task_id"])
@@ -233,7 +233,7 @@ async def test_control_epoch_and_business_state_version_are_independent(make_env
         await env.hold(control(env))
         assert env.world.version == version
         assert (await env.submit(old)).reason == "stale_epoch"
-        await env.resume(control(env, state_version=version))
+        await env.allow_actions(control(env, state_version=version))
         stale_state = action(env, "observe", {})
         epoch = env.epoch
         await env.submit(action(env))
@@ -279,11 +279,10 @@ async def test_submitted_action_lost_on_restart_is_unknown_but_other_branch_fini
         await tts.close()
 
 
-async def test_replacement_chain_does_not_skip_original_stopping_resource(make_env, tmp_path):
+async def test_cancelling_blocks_new_tasks_until_all_old_resources_stop(make_env, tmp_path):
     env = make_env(duration=0.1)
-    tts = make_mock_tts(tmp_path / "chain.db", duration=0.01)
-    node = OfflineNode(env)
-    runtime = Runtime({"wrs": node, "tts": OfflineNode(tts)}, load_bindings()[1])
+    tts = make_mock_tts(tmp_path / "cancel.db", duration=0.01)
+    runtime = Runtime({"wrs": OfflineNode(env), "tts": OfflineNode(tts)}, load_bindings()[1])
     waiting, release = asyncio.Event(), asyncio.Event()
     wait_stopped = runtime._wait_stopped
 
@@ -298,26 +297,20 @@ async def test_replacement_chain_does_not_skip_original_stopping_resource(make_e
     try:
         first = await runtime.start(TaskRequest(request_id="one", plan=motion()))
         await eventually(env.snapshot, lambda s: s.active_action is not None)
-        control_request = TaskControl(request_id="hold-one", task_id=first["task_id"])
-        receipts = await asyncio.gather(
-            runtime.hold(control_request), runtime.hold(control_request)
-        )
+        request = TaskCancelRequest(request_id="cancel", task_id=first["task_id"])
+        receipts = await asyncio.gather(runtime.cancel(request), runtime.cancel(request))
         assert receipts[0] == receipts[1] and receipts[0]["accepted"]
-        second = await runtime.replace(
-            TaskControl(request_id="two", task_id=first["task_id"], replacement=speech)
-        )
         await waiting.wait()
-        await runtime.hold(TaskControl(request_id="hold-two", task_id=second["task_id"]))
-        third = await runtime.replace(
-            TaskControl(request_id="three", task_id=second["task_id"], replacement=speech)
-        )
-        await asyncio.sleep(0.03)
-        assert tts.executions == 0 and runtime.state == "RESUMING"
+        for index in range(2):
+            with pytest.raises(ValueError, match="task_busy"):
+                await runtime.start(TaskRequest(request_id=f"next-{index}", plan=speech))
+        assert tts.executions == 0 and runtime.state == "CANCELLING"
         release.set()
-        await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
         assert runtime.task_status(first["task_id"])["state"] == "CANCELLED"
-        assert runtime.task_status(second["task_id"])["state"] == "CANCELLED"
-        assert runtime.task_id == third["task_id"] and tts.executions == 1
+        second = await runtime.start(TaskRequest(request_id="ready", plan=speech))
+        await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
+        assert runtime.task_id == second["task_id"] and tts.executions == 1
     finally:
         release.set()
         await runtime.close()

@@ -16,10 +16,10 @@ def main():
         receipt = system.send_text("停止", input_id="utterance")
         assert receipt.accepted and receipt.task_id == task.id
         print("stop accepted:", receipt.phase, "task:", task.status().state)
-        # A stop does not automatically execute a new target or resume an old plan.
-        replacement = task.replace(step("move_named_pose", pose="C"))
-        assert replacement.wait().state == "SUCCEEDED"
+        # Cancellation finishes independently; submit a new goal only after confirmation.
         assert task.wait().state == "CANCELLED"
+        next_task = system.start(step("move_named_pose", pose="C"))
+        assert next_task.wait().state == "SUCCEEDED"
         # Stable input_id allows the caller to reconcile a lost reply without a second goal.
         goal = system.send_text("put A in B", input_id="next-goal")
         planned = system.planning(goal.request_id).wait()

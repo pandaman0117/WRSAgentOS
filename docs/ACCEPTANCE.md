@@ -1,6 +1,6 @@
 # WRS-Agent V1 验收合同
 
-完整 V1 矩阵仍按阶段验收；本轮实际结果见文末及 reports/acceptance.json，未运行项不视为通过。报告必须区分 PASS、FAIL、SKIP、BLOCKED 与 UNVERIFIED。SKIP/BLOCKED 不算通过。
+完整 V1 矩阵仍按阶段验收；最新结果见文末及 reports/cancel_summary.json；旧阶段报告为历史证据，未运行项不视为通过。报告必须区分 PASS、FAIL、SKIP、BLOCKED 与 UNVERIFIED。SKIP/BLOCKED 不算通过。
 
 ## 1. 环境层级
 
@@ -32,8 +32,8 @@ E：人工监督的实际机器人测试，必须另行 opt-in；不作为无人
 | T10 | B | action_id 相同、参数不同 | 明确拒绝 |
 | T11 | B | hold 后迟到动作/轨迹 | 旧 boot/epoch 动作拒收 |
 | T12 | A/B | 修改目标后旧模型结果返回 | 旧 revision 结果丢弃，不重新开启运动 |
-| T13 | B | hold 后没有 resume | 新动作也不能自行越过暂停状态 |
-| T14 | B | resume | 仅恢复接收资格，不续跑旧轨迹 |
+| T13 | B | 设备 hold 后没有 allow_actions | 新动作不能自行越过设备关闭准入状态 |
+| T14 | B | allow_actions | 仅允许新动作，不续跑旧轨迹 |
 | T15 | B | 同机械臂两个技能 | 资源互斥，不并发下发冲突动作 |
 | T16 | B | 停止时运动资源被占用 | 控制通道不等普通动作锁释放 |
 | T17 | B | 收到动作但回执丢失 | 使用 status 恢复，不创建新 ID 盲重试 |
@@ -361,3 +361,34 @@ reports/example_paths_summary.json；Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13
 未验证/未实现：真实 ASR 与麦克风、有声 TTS、UI、真实 GLM 服务、WRS 抓放/碰撞、实机、跨机 ACL、性能指标和干净机器 WRS 全依赖恢复。context、动态接纳、设备所有权协调、持久任务恢复本轮不扩展。软件验收没有失败或阻塞，这些后续项目不记作已通过。语音输入是识别后的文本及保守词表，不是自然语言理解或硬件急停认证。
 
 交接入口：[DEVELOPMENT.md](DEVELOPMENT.md)、[VOICE_INPUT.md](VOICE_INPUT.md)。后续开发者可分别接 WRS、TTS、ASR 和 UI，按文档合同交付各自的后端与实际证据。可运行命令：`./scripts/run.ps1 examples/tasks/07_voice_control.py`、`./scripts/run.ps1 examples/developer/05_custom_skill.py`、`./scripts/run.ps1 examples/developer/06_glm_runtime.py`。
+
+
+## 删除任务替换与独立取消（2026-09-20，当前协议 v4）
+
+删除 TaskHandle/Runtime 的 hold、replace，删除 supersedes、任务 HELD/RESUMING 和替换链。保留设备 hold；设备 resume 更名 allow_actions。任务通过 cancel → CANCELLING → CANCELLED/UNKNOWN 独立收尾；确认后 start 创建新任务。TaskCancelReceipt 的 STOPPING 仅表示受理；旧句柄、重复取消与重连始终绑定原任务。context 和自动接纳配置外节点/技能未改动。
+
+最终 **303 passed（235 unit + 63 真实 Zenoh/Mock + 5 WRS 虚拟），0 failed/errors/skipped**。集成测试按标记分两组，deselected 不计为跳过。采用分组执行，已通过的组未重复运行；随后完成 verify.py 清单中的其余示例、Ruff 和 doctor 检查。
+
+实际命令：
+
+```powershell
+./scripts/run.ps1 -m pytest -q tests/unit --junitxml=reports/cancel_unit.xml
+./scripts/run.ps1 -m pytest -q tests/integration -m 'zenoh and not wrs' --junitxml=reports/cancel_zenoh_initial.xml
+./scripts/run.ps1 -m pytest -q tests/integration -m wrs --junitxml=reports/cancel_wrs.xml
+./scripts/run.ps1 -m ruff check wrs_agent tests examples scripts
+./scripts/run.ps1 scripts/doctor.py --probe-wrs --output reports/cancel_doctor.json
+```
+
+其余检查由本地 reports/verify_cancel_remaining.py 顺序运行，17 项全部 exit 0（14 次示例运行，以及 WRS 测试、Ruff、doctor）。包含任务句柄、文本停止、自定义节点/技能、GLM 离线适配、WRS 完成/取消等全部验收示例；完整命令及输出文件列表见 reports/cancel_checks.json。
+
+新增 10 项回归：取消空闲 TTS 时撤销在途旧动作；独立取消排队项；任务取消前/后另一次设备 hold 都不能被自动解除；取消中重启不控制新实例；原动作状态延迟、UNKNOWN、缺失、成功但未验证四种结果；真实 Zenoh 的取消回执丢失和并发重复不能误停新任务。既有资源隔离、旧任务跨重启、Voice 控制幂等、句柄重连与观察超时回归均迁移并保留。
+
+开发者中断示例实际输出：持物停止后仍持 A、旧请求 stale_epoch、迟到模型失效；随后独立 start 的新 task_id 完成 A → C。普通任务例子使用识别后的文本，不使用旧的自动替换回放。旧的重复历史 API 说明已收敛为当前用法，Git 和本文件保留历史验收。
+
+首轮 unit 为 225 passed / 1 failed：原测试在动作尚未 RUNNING 时就取消，却断言实际执行次数；恢复等待 RUNNING 的条件后，保留次数断言并通过最终 235 项。首轮 Ruff 格式与未使用导入已修复。初始 unit 证据 reports/cancel_initial_unit.xml 保留，未伪造为通过。
+
+汇总与证据：reports/cancel_summary.json、cancel_checks.json、上述 XML、cancel_doctor.json 和各 cancel_*.txt。依赖未变：Python 3.12.0、Zenoh/router 1.9.0、Pydantic 2.13.5、pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8。WRS 固定 2bb014b747833c2fd9345115fbe26ffb11376f20，submodule 干净；没有新增依赖或锁文件变更。
+
+协议使用 wrs/v4 与 Envelope.schema_version=4，外部客户端和节点需一起升级，无旧端点兼容层。真实硬件、GLM、ASR/有声 TTS、UI、跨机 ACL、性能与干净机器 WRS 依赖仍为 UNVERIFIED；不作延迟或安全认证声明。DimOS 仅核对参考源码，取舍见 [节点与消息](NODES_AND_MESSAGES.md)，未引入新 Module/Stream 框架或传输依赖。
+
+下一开发入口：[开发交接](DEVELOPMENT.md) 与 examples/developer/05_custom_skill.py；分别推进 WRS、TTS、ASR、UI，任务控制统一使用 cancel/wait/start。

@@ -177,15 +177,15 @@ Action 在实现上也使用请求和事件，但它还要保存动作编号、�
 
 | 交互 | 示例调用 | 发生什么 |
 |---|---|---|
-| “做到哪一步了？” | `system.replay("query")` | 查询任务状态，动作继续 |
-| “别说了。” | `system.replay("barge_in")` | Voice 直接请求取消 TTS，机械臂继续 |
-| “停一下。” | `system.replay("stop")` | Voice 直接请求机器人停止，并检查停止反馈 |
+| “做到哪一步了？” | `system.send_text("做到哪一步了")` | 查询任务状态，动作继续 |
+| “别说了。” | `system.send_text("停止播报")` | Voice 直接请求取消 TTS，机械臂继续 |
+| “停一下。” | `system.send_text("停止")` | Voice 请求 Runtime 取消当前任务，并检查停止反馈 |
 
-`replay()` 的意思是**回放一个已经分类好的意图**。屏幕上的中文是在解释事件，不是程序正在听麦克风，也不是模型刚识别出的语音。单纯检测到声音还不足以认定用户要求机器人停止。
+`send_text()` 输入已经识别好的文字，由 Voice 本地规则分类。例子没有麦克风，也没有实际语音识别。单纯检测到声音还不足以认定用户要求机器人停止。
 
 这个例子还会检查查询和取消播报没有改变机器人的控制状态。最终输出包含 `Planner 调用 0`：我们写好的计划和这些明确的交互都不需要模型判断。
 
-为什么让 Voice 直接联系执行节点？因为模型可能很慢，机器人动作也可能还没完成。来自本机受信入口的停止请求需要自己的处理路径，不能排在“等模型回答”或“等普通动作结束”后面。
+为什么让 Voice 使用独立控制入口？因为模型可能很慢，机器人动作也可能还没完成。来自本机受信入口的停止请求需要自己的处理路径，不能排在“等模型回答”或“等普通动作结束”后面。
 
 对一个直接提交的动作，也可以调用 `action.cancel()`。它返回的是取消处理的回执，还要通过 `action.wait()` 或 `action.status()` 确认结果。**请求停止和确认已经停止，是两件事。** 同样，`wait(timeout=...)` 超时只是脚本不再等待，动作可能还在运行。
 
@@ -195,13 +195,13 @@ Action 在实现上也使用请求和事件，但它还要保存动作编号、�
 
 设想机器人原本要把 A 放到 B，你突然改口要放到 C。此时旧动作可能还在路上，旧的模型回答也可能刚刚返回。系统必须分得清：哪份计划已经失效，哪些结果还属于当前任务。
 
-因此，一份确定计划的执行有自己的 `task_id`。替换计划会建立新任务，用新编号；还在规划时则用 `request_id` 标识那一次请求。每个具体动作也有 `action_id`，重复收到相同动作请求时可以返回原状态，而不是再抓一次。
+因此，一份确定计划的执行有自己的 `task_id`。取消确认后另行 start 建立新任务，用新编号；还在规划时则用 `request_id` 标识那一次请求。每个具体动作也有 `action_id`，重复收到相同动作请求时可以返回原状态，而不是再抓一次。
 
 执行节点还记录“这是哪次启动”和“当前是哪一轮控制”。你会在代码中看到 `boot_id` 和 `control_epoch`：节点重启、停止撤销旧执行权之后，旧请求不能凭过去的状态继续运动。这些信息由系统管理，普通脚本不用手填，模型也不能自行授予权限。
 
-`resume()` 只恢复机器人接收**新动作**的资格，不会续跑旧动作。接下来要根据当前状态重新安排工作。例如物体已经抓住，就不能假定它还放在桌上。
+任务使用 `cancel()` 后等待终态；再用 `start()` 新建任务。设备层 `allow_actions()` 只开放接收**新动作**的资格，不会续跑旧动作。接下来要根据当前状态重新安排工作。例如物体已经抓住，就不能假定它还放在桌上。
 
-还有一种情况：请求发出后连接中断，不知道动作究竟有没有执行。这时状态是 `UNKNOWN`，意思是“还无法确认”。应该先按原动作编号查询和重新观察，不能换个编号盲目再做一次。想进一步了解旧动作如何失效、新任务如何接替，可以继续读 [中断与任务替换例子](../examples/developer/02_mock_interrupt.py)。
+还有一种情况：请求发出后连接中断，不知道动作究竟有没有执行。这时状态是 `UNKNOWN`，意思是“还无法确认”。应该先按原动作编号查询和重新观察，不能换个编号盲目再做一次。想进一步了解旧动作如何失效、新任务如何接替，可以继续读 [中断后创建新任务的例子](../examples/developer/02_mock_interrupt.py)。
 
 ## 7. 从“自己写步骤”走到“只给目标”
 
@@ -341,7 +341,7 @@ WRS 和 TTS 在内部都使用同一种 `ActionClient`，它负责把 Python 调
 
 `client.transport` 是这个入口使用的通信对象，此例取名为 `bus`，用来直接订阅动作通知。
 只有这个讲协议的例子需要它；普通脚本使用 `system.action(...)` 和 `system.snapshot()` 即可。
-机器人额外支持 hold/resume，TTS 不支持；差别由节点提供的服务决定，不靠客户端继承区分。
+机器人额外支持 hold/allow_actions，TTS 不支持；差别由节点提供的服务决定，不靠客户端继承区分。
 
 这次调用实际走的是：
 
@@ -388,7 +388,7 @@ assert receipt.accepted
 - `context()` 向执行节点取得当前状态和短期执行凭证；提交时节点仍检查是否有效。
 - `client.submit(...)` 内部构造 `ActionRequest`、生成 action_id，再通过 `bus.request()` 传输；返回可以查询和等待的动作句柄。这里手写的 task_id 是示例归属标签，不会创建 Agent 多步任务。
 
-不再公开额外的请求组装函数。回复丢失时客户端查询同一个 action_id，不盲目重发。完整调用链、两个版本的区别和任务 hold/replace 用法见 [任务句柄说明](task_handles.md)。
+不再公开额外的请求组装函数。回复丢失时客户端查询同一个 action_id，不盲目重发。完整调用链、两个版本的区别和任务 cancel/start 用法见 [任务句柄说明](task_handles.md)。
 
 #### 第四步：两个接收者分别拿到通知
 
@@ -453,7 +453,7 @@ await bus.request("request/absent", {}, timeout=0.15)
 
 消息能通之后，下一个问题是：**机器人正在干活，模型一直不回答，此时还能查询、停止，再改做另一件事吗？**
 
-运行 [中断与替换例子](../examples/developer/02_mock_interrupt.py)：
+运行 [中断与新任务例子](../examples/developer/02_mock_interrupt.py)：
 
 ```powershell
 ./scripts/run.ps1 examples/developer/02_mock_interrupt.py
@@ -466,10 +466,10 @@ await bus.request("request/absent", {}, timeout=0.15)
 1. **先开始 A → B。** 脚本手写抓取、放置和验证计划，同时播报。等任务状态中同时出现两个活动动作，并确认播报已开始，再继续。
 2. **制造一个挂起的规划请求。** 提交 `goal="next task"`，等规划调用计数变为 1。模型暂时不返回，原来的机器人任务继续运行。
 3. **只取消播报，再查询机器人。** Voice 的 `barge_in` 直达 TTS。脚本等播报变为 `CANCELLED`，再等机器人已经持有 A 且仍有动作运行，发出查询，并确认查询没有改变机器人控制版本。
-4. **停止原任务，保留已经发生的事实。** 向 `request/task/hold` 发送原任务的 `task_id`。收到受理回复后，还要等 `stop_confirmed`。这时 A 已经在手里，停止不会让抓取“倒带”，脚本检查仍持有 A。
+4. **停止原任务，保留已经发生的事实。** 调用原句柄的 `task.cancel()`，它携带原 task_id。收到受理回复后，用 `task.wait()` 等到 CANCELLED，并核对 `stop_confirmed`。这时 A 已经在手里，停止不会让抓取“倒带”，脚本检查仍持有 A。
 5. **试着发送一条过期动作。** 脚本故意拿停止前的凭证，要求把 A 放到 B。即使换了新的 `action_id`，控制版本仍旧过期，因此节点拒绝并返回 `stale_epoch`。
 6. **让旧模型回答姗姗来迟。** 调用仅供测试的 `request/test/planner/release`，放行之前挂起的模型。Runtime 将旧规划标为 `STALE`，表示它已经失效，不能再启动动作。
-7. **按当前状态改放到 C。** 脚本手写剩余两步：“放到 C → 验证”。A 已在手中，所以不再抓取。`request/task/replace` 指定被替换的旧任务，Runtime 建立新任务；脚本核对新旧 `task_id` 不同，且新任务的 `supersedes` 指回旧任务。
+7. **按当前状态改放到 C。** 脚本手写剩余两步：“放到 C → 验证”。A 已在手中，所以不再抓取。旧任务已独立结束，再用 `system.start(*steps)` 创建新任务；脚本核对新旧 task_id 不同。
 
 这里的 `wait_for(...)` 是一个小等待函数：反复查询，直到条件满足或超时。例如等到真正持有 A 后才发停止，能确保例子演示到了“持物停止”，而不是碰巧在抓取开始前就取消了。
 
@@ -480,11 +480,11 @@ await bus.request("request/absent", {}, timeout=0.15)
 | `tts_cancelled_only: true` | 取消播报后，机器人分支仍能继续 |
 | `held_after_stop: "A"` | 停止确认后，仍保留持物状态 |
 | `old_action_rejected: "stale_epoch"` | 停止前的旧执行凭证已失效 |
-| `late_model: "rejected_before_replacement"` | 旧模型输出已被判定过期 |
-| `replacement_has_new_id: true` | 替换产生了另一个任务 |
+| `late_model: "rejected_before_new_task"` | 旧模型输出已被判定过期 |
+| `new_task_has_new_id: true` | start 创建了另一个任务 |
 | `final_task: "SUCCEEDED"`、`final_A_location: "C"` | 新任务完成，模拟物体 A 最后位于 C |
 
-与 tasks 里的停止例子相比，这里还展示了**指定旧任务、等待停止确认、拒绝旧动作和旧模型输出、创建替换任务**这一整段衔接。新的剩余计划是脚本写的，并没有让模型理解“改放到 C”。
+与 tasks 里的停止例子相比，这里还展示了**指定旧任务、等待停止确认、拒绝旧动作和旧模型输出、创建独立新任务**这一整段衔接。新的剩余计划是脚本写的，并没有让模型理解“改放到 C”。
 
 代码里的 `control=True` 选择控制通道，权限仍由执行节点检查。这个例子验证的是本机 Mock 行为，不代表已经测得实机停止时间。想继续追踪执行流程，可以看 [Runtime](../wrs_agent/runtime.py)；想看交互怎样被送往不同节点，可以看 [Voice](../wrs_agent/nodes/voice.py)。
 
@@ -542,7 +542,7 @@ await bus.request("request/absent", {}, timeout=0.15)
 |---|---|
 | `launch/action/start/goal` 怎样工作 | [同步入口](../wrs_agent/sync.py)、[系统接口](../wrs_agent/system.py) |
 | 怎样定义技能、绑定执行节点 | [技能库说明](../wrs_agent/skills/README.md)、[节点配置](../configs/bindings.toml) |
-| 多步任务如何调度、停止和替换 | [Runtime](../wrs_agent/runtime.py) |
+| 多步任务如何调度、取消和确认结束 | [Runtime](../wrs_agent/runtime.py) |
 | 模型响应如何变成计划建议 | [Planner](../wrs_agent/planner/__init__.py) |
 | 机器人动作具体怎样实现 | [Mock 环境](../wrs_agent/env/mock.py)、[WRS 环境](../wrs_agent/env/wrs.py) |
 

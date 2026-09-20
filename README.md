@@ -87,7 +87,8 @@ if planned.task is not None:
 演示：`./scripts/run.ps1 examples/tasks/07_voice_control.py`。这不是麦克风识别或硬件急停验证。
 
 `start()` 返回 TaskHandle，`goal()` 返回 GoalHandle；`task.status/watch` 查询或迭代指定任务的进度，不调用 Planner。
-`system.status()` 保留 Runtime 总览。规划结果、停止与替换语义见 [任务句柄与完整调用链](docs/task_handles.md)。
+`task.cancel()` 受理后进入 CANCELLING，确认结束后为 CANCELLED，否则 UNKNOWN。先 `task.wait()`，再按当前状态 `system.start(...)`；没有替换或续跑接口。
+`system.status()` 保留 Runtime 总览。规划结果、取消与新任务语义见 [任务句柄与完整调用链](docs/task_handles.md)。
 `nodes()` 直接查询配置中的节点、技能、能力和 ready。Skill Registry 描述技能，
 Node Registry 描述当前执行者；配置决定绑定，模型只提出技能。
 节点以 `{"speak": 1}` 声明实现的技能版本，复用技能库中的唯一参数合同；版本不匹配时整项任务在派发前拒绝。
@@ -102,17 +103,17 @@ Node Registry 描述当前执行者；配置决定绑定，模型只提出技能
 
 节点无需共同继承基类。内部只有一种 ActionClient，WRS/TTS 共用动作协议；
 RobotClient 子类已删除。普通用户用 system.action，不必选择或组装 Client。
-机器人节点额外提供 hold/resume 服务，TTS 不提供；
+机器人节点额外提供 hold/allow_actions 服务，TTS 不提供；
 取消只结束指定播报，确认结束后新请求可用新授权开始，不续播旧内容。
 机器人适配器统一放在 `wrs_agent/env/`；旧 `environments/` 转发目录已删除。
 Action 客户端和服务绑定集中在 `nodes/actions.py`，Planner 接口和计划校验集中在
 `planner/__init__.py`。技能描述不再带默认节点，执行位置只由 TOML 配置决定。
 
-Zenoh 协议 v3 使用前缀 wrs/v3/{site}/{target}（target 由节点配置 suffix 确定）。
+Zenoh 协议 v4 使用前缀 wrs/v4/{site}/{target}（target 由节点配置 suffix 确定）。
 精确 Query：request/node/{node_id}、request/action/context、request/action/status；
 Action：request/action/submit、request/control/cancel；Event：events/action。
-WRS 另有 request/snapshot、request/control/hold|resume。Agent 提供 request/task/*
-及 request/nodes；Voice 直接使用目标节点的控制服务。env_id 字段保持原含义；信封 schema_version=3，客户端与节点须同时升级。
+WRS 另有 request/snapshot、request/control/hold|allow_actions。Agent 提供 request/task/*
+及 request/nodes；Voice 停止任务走 Runtime 控制服务，停止播报直接调用 TTS。env_id 字段保持原含义；信封 schema_version=4，客户端与节点须同时升级。
 `system.snapshot()` 默认查询机器人，`system.snapshot("tts")` 查询播报节点；每次只读一个节点。
 返回的 `node_id`、`boot_id`、`state_version`、`captured_at_ns` 说明来源、实例、业务版本和采集时间，
 `data` 是该节点的类型化业务数据：机器人读 `.data.pose`，播报读 `.data.completed`。
@@ -143,7 +144,7 @@ git submodule update --init --recursive
 
 在 IDE 中运行时，将脚本设为 `scripts/run.py`、参数设为 `examples/beginner/01_action.py`、解释器选项设为 `-X utf8 -S`，工作目录设为仓库根目录。这会加载项目锁定依赖；仅选择同一个 Python 而直接运行示例，仍可能加载共享环境中其他版本的包。router 版本检查支持 `RUST_LOG=info/debug` 产生的前置日志，真实版本不匹配时会显示期望版本、路径和实际输出。
 
-tasks/01_parallel_and_stop 演示四个独立节点并行、查询不打断、Voice 直连取消 TTS 与停止 WRS。输入是明确标注的结构化事件回放；不是 ASR，也不是云模型理解结果。developer/02_mock_interrupt 进一步演示并行动作、挂起的 Mock 模型等待、只取消 TTS、持物停止、拒绝旧动作/旧模型结果，以及重新规划到 C。结束时清理自己启动的进程。前台持续运行用 `./scripts/run.ps1 -m wrs_agent launch`，Ctrl+C 停止。
+tasks/01_parallel_and_stop 演示四个独立节点并行、查询不打断、文本控制取消 TTS 或当前任务。输入是已经识别好的文字，没有 ASR 或云模型理解。developer/02_mock_interrupt 进一步演示并行动作、挂起的 Mock 模型等待、只取消 TTS、持物停止、拒绝旧动作/旧模型结果，以及重新规划到 C。结束时清理自己启动的进程。前台持续运行用 `./scripts/run.ps1 -m wrs_agent launch`，Ctrl+C 停止。
 
 `wrs_agent/__main__.py` 是 Python 标准的命令行入口：`python -m wrs_agent` 会执行它。
 它读取参数，启动 `wrs`、`agent`、`tts`、`voice` 中的一个节点，或用 `launch` 启动本机系统；
@@ -152,13 +153,15 @@ tasks/01_parallel_and_stop 演示四个独立节点并行、查询不打断、Vo
 
 已通过单元、真实 Zenoh/Mock 和真实 WRS FK 节点测试、示例、Ruff 和 doctor；各层级的最新数量与命令见 docs/ACCEPTANCE.md。GLM 为离线 HTTP 夹具，不是真实云服务验收。verify.py 会在本地 reports/ 生成验收结果。开发助手指令、执行计划、IDE 配置和机器报告保留本地，不提交远程。
 
+节点、消息与 DimOS 参考的取舍见 [节点与消息](docs/NODES_AND_MESSAGES.md)：V1 不增加 Module 基类、多传输或自动装配层。
+
 通信只有三种语义：
 
 - Event/Stream：发布事实和进度，多订阅者直接接收；事件可能丢失，状态查询补偿。
 - Query：能力、状态等短请求；控制服务有独立有界入口。
 - Action：快速 ACCEPTED，随后进度/终态、按 ID 查询和取消；WRS/TTS 共用同一合同。
 
-默认每个动作节点最多一个冲突资源动作，最多 12 步任务、16 项追加任务、4096 条会话动作/控制记录；达到容量明确拒绝，不删除去重历史再重放。每次确定计划使用独立 task_id；替换生成新 ID 并记录 supersedes。动作 ID、节点 boot_id/epoch、短期授权和停止确认仍各有职责。task_revision 只保留为线路兼容字段，新 Runtime 固定发送 0。
+默认每个动作节点最多一个冲突资源动作，最多 12 步任务、16 项追加任务、4096 条会话动作/控制记录；达到容量明确拒绝，不删除去重历史再重放。每次确定计划使用独立 task_id；取消独立结束旧任务；确认后 start 生成新的任务 ID。动作 ID、节点 boot_id/epoch、短期授权和停止确认仍各有职责。task_revision 只保留为线路兼容字段，新 Runtime 固定发送 0。
 
 默认只连接回环 router，关闭自动网络发现；凭据由启动器生成，经环境变量传给自己的子进程，不靠 source/category/节点名称授予权限。该配置仅用于受信本机 Mock/WRS 虚拟节点，远程身份绑定与 ACL 尚未实现。网络拥塞/查询丢失返回错误或超时，不自动重发物理动作。
 

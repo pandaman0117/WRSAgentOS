@@ -53,7 +53,7 @@ def text_intent(event):
     # Stop first, but never automatically execute the suffix as a replacement.
     first, *rest = re.split(r"[,，;；。!！]", text, maxsplit=1)
     if first.strip() in _STOP and rest:
-        return "stop", "replacement_requires_explicit_plan"
+        return "stop", "cancel_then_start_required"
     if not text or text in _ACK:
         return "ignore", "acknowledgement"
     if text in _QUERY:
@@ -63,5 +63,5 @@ def text_intent(event):
     if re.search(r"停|暂停|取消|\b(?:stop|pause|cancel)\b", text):
         return "clarify", "ambiguous_control"
     if re.search(r"改成|改放|换成|做完|完成后|然后再|\b(?:instead|afterwards)\b", text):
-        return "clarify", "use_task_replace_or_enqueue"
+        return "clarify", "use_explicit_task_commands"
     return "goal", ""

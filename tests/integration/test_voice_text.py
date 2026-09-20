@@ -11,7 +11,7 @@ from wrs_agent.transport import RemoteError, Transport
 pytestmark = pytest.mark.zenoh
 
 
-async def test_text_controls_scope_idempotence_and_replacement():
+async def test_text_controls_scope_idempotence_and_new_task():
     async with System.launch(duration=1.5) as system:
         task = await system.start(step("move_named_pose", pose="B"), step("speak", text="working"))
         await eventually(system.status, lambda s: len(s["active_actions"]) == 2)
@@ -28,8 +28,8 @@ async def test_text_controls_scope_idempotence_and_replacement():
         assert (await system.snapshot()).control_epoch == epoch
         receipt = await system.send_text("停止", input_id="utterance")
         assert receipt.accepted and receipt.task_id == task.id
-        assert (await task.status()).state == "HELD"
-        replacement = await task.replace(step("move_named_pose", pose="C"))
+        assert (await task.wait()).state == "CANCELLED"
+        replacement = await system.start(step("move_named_pose", pose="C"))
         assert await system.send_text("停止", input_id="utterance") == receipt
         assert (await replacement.wait()).state == "SUCCEEDED"
         assert (await task.wait()).state == "CANCELLED"
@@ -65,7 +65,7 @@ async def test_text_stop_invalidates_hung_planning_and_cannot_stop_later_task():
         assert stop.accepted
         assert (await system.planning(receipt.request_id).wait()).state == "STALE"
         await system.agent.request("request/test/planner/release", {}, control=True)
-        assert (await system.resume()).accepted
+        assert (await system.allow_actions()).accepted
         task = await system.start(step("move_named_pose", pose="B"))
         assert await system.send_text("停止", input_id="stop-planning") == stop
         assert (await task.wait()).state == "SUCCEEDED"
@@ -130,5 +130,5 @@ async def test_text_stop_of_speech_only_task_ignores_offline_robot():
         receipt = await system.send_text("停止")
         assert receipt.accepted and receipt.task_id == task.id
         assert receipt.phase in {"STOPPING", "STOPPED"}
-        assert (await task.status()).state == "HELD"
+        assert (await task.wait()).state == "CANCELLED"
         await eventually(lambda: system.snapshot("tts"), lambda s: s.stop_confirmed)

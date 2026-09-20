@@ -60,35 +60,15 @@ def register_voice(bus, wrs, tts, agent_bus):
             result.update(await stop_node(disposition, event.event_id, record))
         elif disposition == "answer":
             result["task"] = await agent_bus.request("request/task/status", {})
-        elif disposition in {"update", "enqueue"}:
-            # Structured replay carries an explicit plan, never inferred coordinates.
+        elif disposition == "update":
+            result.update(disposition="clarify", reason="cancel_then_start_required")
+        elif disposition == "enqueue":
             if event.plan is None:
                 result.update(disposition="clarify", reason="explicit_plan_required_in_replay")
-            elif disposition == "enqueue":
+            else:
                 result["task"] = await agent_bus.request(
                     "request/task/enqueue",
                     {"request_id": event.event_id, "plan": event.plan.model_dump()},
-                )
-            else:
-                if "target" not in record:
-                    current = await agent_bus.request("request/task/status", {})
-                    if current["task_id"] is None:
-                        raise AgentError("no_task_to_replace")
-                    record["target"] = current["task_id"]
-                target = record["target"]
-                await agent_bus.request(
-                    "request/task/hold",
-                    {"request_id": event.event_id + "-hold", "task_id": target},
-                    control=True,
-                )
-                result["task"] = await agent_bus.request(
-                    "request/task/replace",
-                    {
-                        "request_id": event.event_id,
-                        "task_id": target,
-                        "replacement": event.plan.model_dump(),
-                    },
-                    control=True,
                 )
         bus.publish("events/interaction", {"event_id": event.event_id, **result})
         return result

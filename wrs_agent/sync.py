@@ -57,11 +57,8 @@ class TaskHandle:
             if not self._session._closed:
                 self._session._call(stream.aclose)
 
-    def hold(self):
-        return self._session._call(self._handle.hold)
-
-    def replace(self, *steps):
-        return TaskHandle(self._session, self._session._call(self._handle.replace, *steps))
+    def cancel(self):
+        return self._session._call(self._handle.cancel)
 
 
 class GoalHandle:
@@ -151,8 +148,8 @@ class Session:
     def snapshot(self, node=None):
         return self._call(self._system.snapshot, node)
 
-    def resume(self, node=None):
-        return self._call(self._system.resume, node)
+    def allow_actions(self, node=None):
+        return self._call(self._system.allow_actions, node)
 
     def replay(self, kind):
         return self._call(self._system.replay, kind)

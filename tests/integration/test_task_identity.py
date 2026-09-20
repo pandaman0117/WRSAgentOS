@@ -11,7 +11,7 @@ from wrs_agent.transport import RemoteError
 pytestmark = pytest.mark.zenoh
 
 
-async def test_scoped_replacement_rejects_late_and_legacy_task_controls():
+async def test_scoped_cancel_rejects_late_controls_and_revision_does_not_execute():
     async with System.launch(duration=0.4) as system:
         a = await system.start(step("move_named_pose", pose="B"))
         await eventually(system.snapshot, lambda w: w.active_action is not None)
@@ -26,21 +26,20 @@ async def test_scoped_replacement_rejects_late_and_legacy_task_controls():
                 "plan": Plan(steps=[step("move_named_pose", pose="C")]).model_dump(),
             },
         )
-        b = response["task"]
-        assert b["task_id"] != a.id and b["supersedes"] == a.id
-        for operation in ("hold", "replace"):
-            with pytest.raises(RemoteError, match="task_id_required"):
-                await system.agent.request(
-                    f"request/task/{operation}", {"request_id": new_id()}, control=True
-                )
-            with pytest.raises(RemoteError, match="stale_task"):
-                await system.agent.request(
-                    f"request/task/{operation}",
-                    {"request_id": new_id(), "task_id": a.id},
-                    control=True,
-                )
-        final = await system.task(b["task_id"]).wait()
-        assert final.task_id == b["task_id"] and final.state == "SUCCEEDED"
+        assert response["disposition"] == "clarify"
+        assert (await a.cancel()).accepted
+        assert (await a.wait()).state == "CANCELLED"
+        b = await system.start(step("move_named_pose", pose="C"))
+        with pytest.raises(RemoteError, match="task_id_required"):
+            await system.agent.request(
+                "request/task/cancel", {"request_id": new_id()}, control=True
+            )
+        with pytest.raises(RemoteError, match="stale_task"):
+            await system.agent.request(
+                "request/task/cancel", {"request_id": new_id(), "task_id": a.id}, control=True
+            )
+        assert (await b.wait()).state == "SUCCEEDED"
+        assert b.id != a.id and (await a.status()).state == "CANCELLED"
         assert (await robot.status(old_action)).state == "CANCELLED"
         assert (await system.snapshot()).data.pose == "C"
         assert (await robot.transport.request("request/health", {}))["executions"] == 2

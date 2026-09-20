@@ -66,7 +66,7 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
 
 
 @pytest.mark.parametrize("kind", ["cancel", "hold"])
-async def test_real_wrs_cancel_hold_resume_and_old_epoch(kind):
+async def test_real_wrs_cancel_hold_allow_actions_and_old_epoch(kind):
     async with LocalStack(
         backend="wrs_virtual", duration=1, bindings="tests/fixtures/actions.toml"
     ) as stack:
@@ -91,8 +91,8 @@ async def test_real_wrs_cancel_hold_resume_and_old_epoch(kind):
         await asyncio.sleep(0.08)
         assert (await node.snapshot()).data.kinematics.joints == stopped.data.kinematics.joints
         assert not (await submit_request(node, old)).accepted
-        resume = await node.control(
-            "resume",
+        allow_actions = await node.control(
+            "allow_actions",
             ControlRequest(
                 interrupt_id=new_id(),
                 boot_id=stopped.boot_id,
@@ -100,7 +100,7 @@ async def test_real_wrs_cancel_hold_resume_and_old_epoch(kind):
                 state_version=stopped.state_version,
             ),
         )
-        assert resume.accepted and (await node.snapshot()).active_action is None
+        assert allow_actions.accepted and (await node.snapshot()).active_action is None
         fresh = await request_for(node, pose="C")
         assert (await submit_request(node, fresh)).accepted
         await eventually(lambda: node.status(fresh.action_id), lambda s: s.state == "SUCCEEDED")

@@ -31,8 +31,8 @@ async def test_action_and_control_idempotence_and_fencing(make_env):
         assert (await env.submit(action(env))).reason == "admission_closed"
         stale = request.model_copy(update={"action_id": "late"})
         assert (await env.submit(stale)).reason == "stale_epoch"
-        assert not (await env.control("resume", control(env), authorized=False)).accepted
-        assert (await env.resume(control(env, state_version=env.world.version))).accepted
+        assert not (await env.control("allow_actions", control(env), authorized=False)).accepted
+        assert (await env.allow_actions(control(env, state_version=env.world.version))).accepted
         assert env.executions == 1  # Resume doesn't revive trajectories.
     finally:
         await env.close()
@@ -79,7 +79,9 @@ async def test_faults_do_not_claim_success(make_env, fault, state, verification)
         assert result.state == state and result.verification == verification
         assert env.world.held is None
         if state == "UNKNOWN":
-            assert not (await env.resume(control(env, state_version=env.world.version))).accepted
+            assert not (
+                await env.allow_actions(control(env, state_version=env.world.version))
+            ).accepted
             assert not (await env.submit(action(env))).accepted
     finally:
         await env.close()
@@ -118,7 +120,7 @@ async def test_restart_marks_inflight_unknown_and_rejects_old_boot(tmp_path):
         await restarted.close()
 
 
-async def test_unknown_stop_never_resumes(make_env):
+async def test_unknown_stop_never_allow_actionss(make_env):
     env = make_env(duration=1, fault="stop_unknown")
     try:
         req = action(env)
@@ -126,7 +128,7 @@ async def test_unknown_stop_never_resumes(make_env):
         await eventually(lambda: env.status(req.action_id), lambda s: s.state == "RUNNING")
         await env.hold(control(env))
         await eventually(lambda: env.status(req.action_id), lambda s: s.state == "UNKNOWN")
-        assert not (await env.resume(control(env, state_version=env.world.version))).accepted
+        assert not (await env.allow_actions(control(env, state_version=env.world.version))).accepted
     finally:
         await env.close()
 

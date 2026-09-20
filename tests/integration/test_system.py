@@ -65,7 +65,7 @@ async def test_action_handle_dedup_status_and_tts_without_robot_controls():
         assert spoken.state_version > observed.state_version
         health = await tts.transport.request("request/health", {})
         assert health["executions"] == 1
-        for key in ("hold", "resume"):
+        for key in ("hold", "allow_actions"):
             with pytest.raises(TimeoutError):
                 await tts.transport.request(f"request/control/{key}", {}, control=True, timeout=0.1)
         cancelled = await system.action("speak", text="cancel me")
@@ -127,7 +127,7 @@ async def test_runtime_resolves_renamed_node_from_configuration(tmp_path):
         assert world.data.pose == "B" and world.node_id == "wrs_lite6"
         task = await system.start(step("move_named_pose", pose="C"))
         result = await system.agent.request(
-            "request/task/hold", {"request_id": new_id(), "task_id": task.id}, control=True
+            "request/task/cancel", {"request_id": new_id(), "task_id": task.id}, control=True
         )
         assert result["accepted"]
 
@@ -153,9 +153,9 @@ async def test_public_action_recovers_lost_receipt_and_repeated_cancel(monkeypat
         assert await cancelled.cancel() == first
 
 
-async def test_runtime_hold_has_no_normal_capability_query(monkeypatch):
+async def test_runtime_cancel_has_no_normal_capability_query(monkeypatch):
     from wrs_agent.runtime import Runtime
-    from wrs_agent.schemas import Plan, TaskControl, TaskRequest
+    from wrs_agent.schemas import Plan, TaskCancelRequest, TaskRequest
 
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=1) as stack:
         nodes = stack.system.clients
@@ -174,8 +174,11 @@ async def test_runtime_hold_has_no_normal_capability_query(monkeypatch):
                     request_id=new_id(), plan=Plan(steps=[step("move_named_pose", pose="B")])
                 )
             )
-            result = await runtime.hold(TaskControl(request_id=new_id(), task_id=task["task_id"]))
-            assert result["accepted"] and result["phase"] == "STOPPED"
+            result = await runtime.cancel(
+                TaskCancelRequest(request_id=new_id(), task_id=task["task_id"])
+            )
+            assert result["accepted"] and result["phase"] == "STOPPING"
+            await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
         finally:
             await runtime.close()
 

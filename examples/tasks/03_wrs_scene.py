@@ -31,8 +31,8 @@ def run(cancel):
         assert result.state == ("CANCELLED" if cancel else "SUCCEEDED")
         print("snapshot", system.snapshot().model_dump())
         if cancel:
-            # resume 只恢复接收新动作的资格，不续跑已取消动作；下面另建回 home 的任务。
-            assert system.resume().accepted
+            # allow_actions 只恢复接收新动作的资格，不续跑已取消动作；下面另建回 home 的任务。
+            assert system.allow_actions().accepted
         task = system.start(step("move_named_pose", pose="home"))
         assert task.wait().state == "SUCCEEDED"
         print("PASS: real WRS virtual FK; pick/place unsupported; hardware disabled")

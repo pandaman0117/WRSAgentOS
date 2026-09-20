@@ -1,4 +1,4 @@
-"""Agent coordinates; Voice directly controls TTS/WRS. Replay, not real audio."""
+"""Parallel actions and explicit text controls; no microphone or ASR."""
 
 from wrs_agent import launch, step
 
@@ -24,24 +24,25 @@ def main():
         before = system.snapshot()
         print("并行 Action", state.active_actions)
         print("用户：你做到哪一步了？")
-        # replay 输入已分类的交互意图，演示 Voice 路由；这里没有麦克风或语音识别。
-        answer = system.replay("query")
-        print("状态", answer["task"]["state"])
+        # 输入已经识别好的文字；这里没有麦克风或语音识别。
+        answer = system.send_text("做到哪一步了")
+        print("状态", answer.overview["state"])
         # control_epoch 是节点的控制版本；只读查询不应撤销已有动作的授权。
         assert system.snapshot().control_epoch == before.control_epoch
         print("用户：别说了。")
-        # barge_in 只取消 TTS 播报，机械臂动作及其控制版本保持不变。
-        print("Voice → TTS", system.replay("barge_in"))
+        # 停止播报只取消 TTS 播报，机械臂动作及其控制版本保持不变。
+        print("Voice → TTS", system.send_text("停止播报"))
         assert system.snapshot().active_action == before.active_action
         assert system.snapshot().control_epoch == before.control_epoch
         print("用户：停一下。")
-        # 明确停止由 Voice 直达机器人节点，不等 Planner；随后检查停止是否已确认。
-        print("Voice → WRS", system.replay("stop"))
+        # 明确停止经 Runtime 控制入口取消当前任务，不等 Planner；随后确认终态。
+        print("Voice → Runtime cancel", system.send_text("停止"))
         result = task.wait()
+        assert result.state == "CANCELLED"
         assert system.snapshot().stop_confirmed
         assert system.status()["planner_calls"] == 0
         print("结果", result.state, "Planner 调用", system.status()["planner_calls"])
-        print("PASS: real Zenoh, four independent nodes; Mock actions and voice replay")
+        print("PASS: real Zenoh, four independent nodes; Mock actions and text input")
 
 
 if __name__ == "__main__":

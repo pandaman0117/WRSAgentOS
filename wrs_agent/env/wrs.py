@@ -135,7 +135,7 @@ async def make_wrs_environment(journal_path, *, duration=0.4, allow_hardware=Fal
             return verified
         except Exception:
             state.kinematics = {**state.kinematics, "valid": False}
-            # A model update may have happened; no blind resume or retry.
+            # A model update may have happened; no blind allow_actions or retry.
             raise ExecutionUnknown("wrs_model_state_unknown") from None
 
     async def close():

@@ -9,7 +9,12 @@ from wrs_agent.planner import ModelPlanner
 from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.policy import text_intent
 from wrs_agent.runtime import Runtime
-from wrs_agent.schemas import GoalRequest, InterruptRequest, TaskControl, TaskRequest, TextInput
+from wrs_agent.schemas import (
+    GoalRequest,
+    InterruptRequest,
+    TaskRequest,
+    TextInput,
+)
 
 
 @pytest.mark.parametrize(
@@ -42,7 +47,7 @@ def test_partial_and_low_confidence_never_execute():
     assert text_intent(TextInput(text="停", confidence=0.4))[0] == "clarify"
 
 
-async def test_interrupt_binds_task_once_and_does_not_retarget_replacement(make_env):
+async def test_interrupt_binds_task_once_and_does_not_retarget_new_task(make_env):
     env = make_env(duration=0.15)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1])
     try:
@@ -51,15 +56,14 @@ async def test_interrupt_binds_task_once_and_does_not_retarget_replacement(make_
         stop = InterruptRequest(request_id="operator-stop")
         one, two = await asyncio.gather(runtime.interrupt(stop), runtime.interrupt(stop))
         assert one == two and one["accepted"] and one["task_id"] == first["task_id"]
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
         after = env.epoch
-        replacement = await runtime.replace(
-            TaskControl(request_id="replace", task_id=first["task_id"], replacement=motion("C"))
-        )
+        replacement = await runtime.start(TaskRequest(request_id="next", plan=motion("C")))
         await eventually(runtime.snapshot, lambda s: s["state"] == "RUNNING")
         assert await runtime.interrupt(stop) == one
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         assert runtime.task_id == replacement["task_id"]
-        assert env.epoch == after + 1  # Resume only; duplicate stop did not change control.
+        assert env.epoch == after  # Duplicate stop did not change control.
     finally:
         await runtime.close()
         await env.close()

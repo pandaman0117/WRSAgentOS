@@ -1,6 +1,6 @@
 # 任务句柄、请求调用链与状态版本
 
-本轮保留 `context()` 和 `ActionContext`；节点仍由 TOML 配置允许，未增加自动接纳节点或技能。公开调用不再需要 `action_request()`。协议使用 `wrs/v3/{site}/{target}` 和 `Envelope.schema_version=3`，节点与客户端需要一起升级；不提供旧字段别名。
+当前保留 `context()` 和 `ActionContext`；节点仍由 TOML 配置允许，未增加自动接纳节点或技能。公开调用不再需要 `action_request()`。协议使用 `wrs/v4/{site}/{target}` 和 `Envelope.schema_version=4`，节点与客户端需要一起升级；不提供旧字段别名。
 
 ## 一次动作的完整调用链
 
@@ -67,28 +67,40 @@ with launch() as system:
 | `status()` | 返回这项任务的一次 `TaskStatus` |
 | `wait(timeout=10)` | 等待终态并返回 `TaskStatus`，也可能 FAILED/CANCELLED/UNKNOWN |
 | `watch(timeout=10)` | 每 20ms 尝试轮询并返回有变化的状态，可能错过瞬时进度 |
-| `hold()` | 阻止后续派发，并请求参与资源停止；返回 `TaskHoldReceipt` |
-| `replace(*steps)` | 显式替换此任务，返回一个新任务句柄 |
+| `cancel()` | 取消这项任务；返回 `TaskCancelReceipt`，受理与停止完成分开 |
 
-`wait/watch` 超时只结束观察；关闭 watch 迭代器也不会取消任务。`timeout=None` 允许持续观察。`HELD` 不是终态，等待会继续。退出 `connect()` 仅关闭客户端；退出 `launch()` 则仍会关闭它拥有的本地节点。
+`wait/watch` 超时只结束观察；关闭 watch 迭代器也不会取消任务。`timeout=None` 允许持续观察。`CANCELLING` 不是终态，等待会继续。退出 `connect()` 仅关闭客户端；退出 `launch()` 则仍会关闭它拥有的本地节点。
 
 ```python
 from wrs_agent import launch, step
 
 with launch(duration=1) as system:
     task = system.start(step("move_named_pose", pose="B"))
-    receipt = task.hold()
-    assert receipt.accepted and receipt.phase != "UNKNOWN", receipt
-    replacement = task.replace(step("move_named_pose", pose="C"))
-    print(replacement.wait().state)
-    print(task.wait().state)  # 原任务结果，通常为 CANCELLED
+    receipt = task.cancel()
+    assert receipt.accepted, receipt
+    stopped = task.wait()
+    if stopped.state == "CANCELLED":
+        next_task = system.start(step("move_named_pose", pose="C"))
+        print(next_task.wait().state)
+    else:
+        print(stopped.state, stopped.error)
 ```
 
-`replace()` 要求已显式调用并成功受理 hold。STOPPING 只表示正在停止；新任务以 RESUMING 等待旧参与资源停止确认。旧计划涉及、替换计划不再使用的资源也必须确认停止；无关配置节点不参与。若无法确认，新任务进入 UNKNOWN。重复替换也不能绕过更早的停止依赖。
+`cancel()` 受理后，任务进入 CANCELLING：立即阻止后续派发，使待返回规划失效，清空依赖当前任务继续执行的追加队列；后台请求所有参与资源停止，等待在途提交并按原 action_id 核对结果。确认后独立进入 CANCELLED，无法确认则 UNKNOWN。它不需要另一项任务来完成收尾，也不撤销已经发生的抓取、播音等效果。
 
-控制版本变化后，已提交动作继续按原 action_id 查询结果：CANCELLING 仍需等待，只有缺失、不确定或查询超时才报告 UNKNOWN。不会给旧计划重新申请新控制版本的执行资格。
+只有当前任务的参与节点进入停止确认，无关节点离线不影响取消。即使参与节点暂时空闲，也要撤销旧控制版本，阻止网络途中迟到的旧动作。
 
-确认旧资源停止后，旧任务保存自己的终态；新任务获得新的 task_id，并以 supersedes 指向旧任务。旧句柄不会跟随新任务。hold 不承诺续跑旧计划；修改目标时需明确写出新的剩余步骤，例如已经持有 A 时仅提交放置和验证。
+CANCELLING / UNKNOWN 时 `start()` 拒绝新任务，返回 task_busy。确认正常取消后可以提交一项独立新任务；根据停止后的真实状态写步骤，例如 A 已在手里就只提交放置与验证。旧句柄一直保存原结果，不会跟随新任务。没有替换链或自动续跑。
+
+取消排队任务只删除指定排队项，不影响正在执行的任务与其他排队项；取消当前任务则一并取消尚未执行的追加队列。已知终态的当前任务收到取消请求时保持原终态。旧任务 ID 不能取消后来的任务；相同取消请求的重试返回首次受理结果，不代表最新状态，最新状态用 status/wait 查询。句柄自动复用自己的取消 request_id，并发调用和丢回复重试不会重复发起控制。
+
+### 任务取消与设备准入
+
+任务用户只需 `task.cancel()`。设备层仍有节点的 hold 控制服务：停止设备并关闭动作准入。`system.allow_actions(node=...)` 在确认停止、状态有效时允许**新动作**，不会续跑旧任务。此前的 resume 名称已删除。
+
+正常任务取消会在确认动作结束后，重新开放它自己关闭的机器人准入。只有启动实例与本次控制版本仍匹配，且停止前仍是原任务绑定的开放权限，才能自动开放；另一次设备 hold、重启恢复锁止、UNKNOWN 都不能被取消或新任务解除。独立动作 `action.cancel()` 仍遵循节点的规则：机器人保持关闭，Mock TTS 确认结束后可接收新播报。
+
+节点协议中，`ControlRequest.action_id` 有值的 cancel 仅取消匹配的活动动作；无值的 cancel 用于撤销该参与资源的旧权限，包含尚在途中的请求。Runtime 对机器人使用 hold，对 TTS 使用这种资源取消。两者都必须幂等，不能用一个普通“取消协程”冒充停止确认。
 
 异步形式与同步形式一一对应：
 

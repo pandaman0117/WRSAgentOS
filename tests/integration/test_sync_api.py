@@ -37,7 +37,7 @@ def test_sync_wait_timeout_and_scoped_cancel_preserve_remote_control():
         assert system.replay("stop")["accepted"]
         assert motion.wait().state == "CANCELLED"
         assert system.snapshot().stop_confirmed
-        assert system.resume().accepted
+        assert system.allow_actions().accepted
         assert motion.status().state == "CANCELLED"
 
 

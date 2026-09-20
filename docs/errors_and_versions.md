@@ -47,6 +47,7 @@ with launch() as system:
 | `skill_not_on_node` / `unknown_skill` | 执行节点没有实现 / 本地没有注册该技能 |
 | `invalid_arguments` / `invalid_request` | 技能参数 / 消息结构校验失败 |
 | `unauthorized` | 调用身份不被接受 |
+| `task_busy` | 当前任务仍在执行、取消中或结果未知，不能开始另一项任务 |
 | `resource_busy` | 节点已有冲突动作；不会停止占用者 |
 | `request_timeout` | 本次请求没有按时得到回复 |
 | `action_failed` | 动作明确失败；可结合动作的 reason / verification 查看依据 |
@@ -54,7 +55,7 @@ with launch() as system:
 
 提交前的能力、状态或 context 查询失败，任务为 `FAILED`，没有动作身份，不按已执行处理。提交后丢失回执时，客户端只按原 action_id 查询；能查到就继续观察，查不到或查询失败才报告 `execution_unknown`。Runtime 将这类任务记为 `UNKNOWN`，只对相关资源请求控制，不盲目重发动作。
 
-单独查询超时不等于远端执行失败。`wait/watch` 的观察期限到达仍抛出 `TimeoutError`，不会取消远端任务；停止必须显式调用 `hold/cancel`。控制回执的 `accepted`、`phase` 继续区分请求受理与已经停止，`STOPPING` 不等于 `STOPPED`。
+单独查询超时不等于远端执行失败。`wait/watch` 的观察期限到达仍抛出 `TimeoutError`，不会取消远端任务；停止必须显式调用 `task.cancel()` 或 `action.cancel()`。控制回执的 `accepted`、`phase` 继续区分请求受理与已经停止，`STOPPING` 不等于 `STOPPED`。
 
 ## 只有一份技能参数合同
 
@@ -72,7 +73,9 @@ with launch() as system:
 
 ## 协议迁移和范围
 
-当前信封为 `Envelope.schema_version=3`，Zenoh 前缀为 `wrs/v3/{site}/{target}`。节点能力的 `skills` 从名称列表改为版本映射，RPC 错误从字符串改为 ErrorInfo；外部客户端和节点需一起升级，不提供 v2 转换层。已有动作日志保留，旧记录缺少 error 时按 None 读取，不因此重播历史动作。
+当前信封为 `Envelope.schema_version=4`，Zenoh 前缀为 `wrs/v4/{site}/{target}`。v4 删除任务 hold/replace、TaskControl/TaskHoldReceipt、任务 HELD/RESUMING 和 supersedes；使用 task/cancel、TaskCancelRequest/TaskCancelReceipt、CANCELLING。设备 resume 更名 allow_actions，回执阶段为 ACTIONS_ALLOWED。v3 客户端与节点必须一起升级，没有自动兼容路由。
+
+技能声明仍为版本映射，RPC 错误仍为 ErrorInfo。已有动作日志保留，缺少 error 的旧记录按 None 读取，不重播历史动作；Runtime 的任务结果仍只保存于当前进程会话。
 
 本轮没有增加依赖、后台服务或额外版本查询 RPC。检查复用原有节点发现、能力缓存与执行准入；错误只新增小型结构化数据。未做延迟或吞吐基准，不宣称性能提升。
 

@@ -14,14 +14,13 @@ from wrs_agent.transport import RemoteError
 pytestmark = pytest.mark.zenoh
 
 
-async def test_handles_replace_and_reconnect_without_cancelling_observation(monkeypatch):
+async def test_handles_cancel_and_reconnect_without_cancelling_observation(monkeypatch):
     monkeypatch.setenv("WRS_AGENT_TOKEN", secrets.token_urlsafe(32))
     async with LocalStack(duration=0.4) as stack:
         owner = stack.system
         async with System.connect(stack.endpoint, env_id=stack.env_id) as client:
             first = await client.start(step("move_named_pose", pose="B"))
-            with pytest.raises(RemoteError, match="explicit_hold_required"):
-                await first.replace(step("move_named_pose", pose="C"))
+            assert not hasattr(first, "replace") and not hasattr(first, "hold")
             with pytest.raises(TimeoutError):
                 await first.wait(timeout=0.01)
             stream = first.watch()
@@ -33,12 +32,11 @@ async def test_handles_replace_and_reconnect_without_cancelling_observation(monk
             assert (await same.wait()).state == "SUCCEEDED"
             held = await client.start(step("move_named_pose", pose="B"))
             await eventually(client.snapshot, lambda s: s.active_action is not None)
-            assert (await held.hold()).accepted
-            with pytest.raises(TimeoutError):
-                await held.wait(timeout=0.02)  # HELD does not complete the task.
-            newer = await held.replace(step("move_named_pose", pose="C"))
+            assert (await held.cancel()).accepted
+            assert (await held.wait()).state == "CANCELLED"
+            newer = await client.start(step("move_named_pose", pose="C"))
             assert newer.id != held.id
-            assert (await newer.wait()).supersedes == held.id
+            assert (await newer.wait()).state == "SUCCEEDED"
             assert (await held.wait()).state == "CANCELLED"
             assert (await same.status()).state == "SUCCEEDED"
             assert (await owner.task(newer.id).status()).state == "SUCCEEDED"
@@ -110,14 +108,45 @@ async def test_old_plan_cannot_rebind_restarted_robot_and_tts_completed_restart_
         assert (await action.wait()).state == "SUCCEEDED"
 
 
-async def test_hold_replace_with_unrelated_tts_process_offline():
+async def test_cancel_then_start_with_unrelated_tts_process_offline():
     async with System.launch(duration=0.2) as system:
         tts = system._local_stack.processes[2]
         tts.terminate()
         await asyncio.to_thread(tts.wait, timeout=3)
         task = await system.start(step("move_named_pose", pose="B"))
         await eventually(system.snapshot, lambda s: s.active_action is not None)
-        assert (await task.hold()).accepted
-        replacement = await task.replace(step("move_named_pose", pose="C"))
+        assert (await task.cancel()).accepted
+        assert (await task.wait()).state == "CANCELLED"
+        replacement = await system.start(step("move_named_pose", pose="C"))
         assert (await replacement.wait()).state == "SUCCEEDED"
         assert (await task.wait()).state == "CANCELLED"
+
+
+async def test_cancel_reply_loss_and_duplicates_cannot_retarget_later_task():
+    async with System.launch(duration=0.4) as system:
+        task = await system.start(step("move_named_pose", pose="B"))
+        await eventually(system.snapshot, lambda s: s.active_action is not None)
+        original = system.agent.request
+        replies = []
+
+        async def lose_first(suffix, payload, **kwargs):
+            result = await original(suffix, payload, **kwargs)
+            if suffix == "request/task/cancel":
+                replies.append(result)
+                if len(replies) == 1:
+                    raise TimeoutError("cancel reply lost after acceptance")
+            return result
+
+        system.agent.request = lose_first
+        with pytest.raises(TimeoutError):
+            await task.cancel()
+        duplicates = await asyncio.gather(task.cancel(), task.cancel())
+        assert duplicates[0] == duplicates[1]
+        assert replies[0] == replies[1] == replies[2]
+        assert (await task.wait()).state == "CANCELLED"
+        newer = await system.start(step("move_named_pose", pose="C"))
+        before = (await system.snapshot()).control_epoch
+        assert await task.cancel() == duplicates[0]
+        assert (await system.snapshot()).control_epoch == before
+        assert (await newer.wait()).state == "SUCCEEDED"
+        assert (await task.status()).state == "CANCELLED"

@@ -7,8 +7,7 @@ from wrs_agent.schemas import (
     TERMINAL,
     ErrorInfo,
     GoalStatus,
-    Plan,
-    TaskHoldReceipt,
+    TaskCancelReceipt,
     TaskStatus,
     new_id,
 )
@@ -17,6 +16,7 @@ from wrs_agent.schemas import (
 class TaskHandle:
     def __init__(self, system, task_id):
         self._system, self.id = system, task_id
+        self._cancel_id = new_id()
 
     async def status(self):
         return TaskStatus.model_validate(
@@ -44,24 +44,14 @@ class TaskHandle:
             result = state
         return result
 
-    async def hold(self):
-        return TaskHoldReceipt.model_validate(
+    async def cancel(self):
+        return TaskCancelReceipt.model_validate(
             await self._system.agent.request(
-                "request/task/hold", {"request_id": new_id(), "task_id": self.id}, control=True
+                "request/task/cancel",
+                {"request_id": self._cancel_id, "task_id": self.id},
+                control=True,
             )
         )
-
-    async def replace(self, *steps):
-        result = await self._system.agent.request(
-            "request/task/replace",
-            {
-                "request_id": new_id(),
-                "task_id": self.id,
-                "replacement": Plan(steps=list(steps)).model_dump(),
-            },
-            control=True,
-        )
-        return self._system.task(result["task_id"])
 
 
 @dataclass(frozen=True)

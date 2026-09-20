@@ -6,7 +6,7 @@ from wrs_agent.schemas import (
     GoalQuery,
     GoalRequest,
     InterruptRequest,
-    TaskControl,
+    TaskCancelRequest,
     TaskQuery,
     TaskRequest,
 )
@@ -33,13 +33,10 @@ def register_runtime(transport, runtime):
     def control_request(payload):
         if not payload.get("task_id"):
             raise AgentError("task_id_required")
-        return TaskControl.model_validate(payload)
+        return TaskCancelRequest.model_validate(payload)
 
-    async def hold(payload):
-        return await runtime.hold(control_request(payload))
-
-    async def replace(payload):
-        return await runtime.replace(control_request(payload))
+    async def cancel(payload):
+        return await runtime.cancel(control_request(payload))
 
     async def interrupt(payload):
         return await runtime.interrupt(InterruptRequest.model_validate(payload))
@@ -56,5 +53,4 @@ def register_runtime(transport, runtime):
     transport.register_handler("request/task/status", status)
     transport.register_handler("request/goal/status", goal_status)
     transport.register_handler("request/task/interrupt", interrupt, control=True)
-    transport.register_handler("request/task/hold", hold, control=True)
-    transport.register_handler("request/task/replace", replace, control=True)
+    transport.register_handler("request/task/cancel", cancel, control=True)

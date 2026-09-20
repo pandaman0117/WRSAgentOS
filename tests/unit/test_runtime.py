@@ -11,7 +11,7 @@ from wrs_agent.planner import ModelPlanner
 from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
 from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.runtime import Runtime
-from wrs_agent.schemas import GoalRequest, Plan, Step, TaskControl, TaskRequest, new_id
+from wrs_agent.schemas import GoalRequest, Plan, Step, TaskCancelRequest, TaskRequest, new_id
 
 
 class OfflineNode(ActionClient):
@@ -170,13 +170,13 @@ async def test_task_and_queued_plan_are_detached_and_keep_their_ids(make_env):
         assert env.executions == 2 and env.world.pose == "C"
         assert {r[0]["task_id"] for r in env.records.values()} == {a["task_id"], b["task_id"]}
         with pytest.raises(ValueError, match="stale_task"):
-            await runtime.hold(TaskControl(request_id="late", task_id=a["task_id"]))
+            await runtime.cancel(TaskCancelRequest(request_id="late", task_id=a["task_id"]))
     finally:
         await runtime.close()
         await env.close()
 
 
-async def test_replacement_new_id_and_old_controls_cannot_affect_it(make_env):
+async def test_cancel_then_start_keeps_ids_and_rejects_late_controls(make_env):
     env = make_env(duration=0.1)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1])
     try:
@@ -188,25 +188,22 @@ async def test_replacement_new_id_and_old_controls_cannot_affect_it(make_env):
             ),
         )
         old_action = env.active
-        stop = TaskControl(request_id="hold-a", task_id=a["task_id"])
-        receipt = await runtime.hold(stop)
-        assert receipt["accepted"]
-        request = TaskControl(request_id="replace-a", task_id=a["task_id"], replacement=motion("C"))
-        b = await runtime.replace(request)
-        assert b["task_id"] != a["task_id"] and b["supersedes"] == a["task_id"]
-        assert await runtime.replace(request) == b
-        for kind in ("hold", "replace"):
-            with pytest.raises(ValueError, match="stale_task"):
-                await getattr(runtime, kind)(
-                    TaskControl(
-                        request_id=new_id(),
-                        task_id=a["task_id"],
-                        replacement=motion() if kind == "replace" else None,
-                    )
-                )
-        assert await runtime.hold(stop) == receipt  # A duplicate never acts again.
+        stop = TaskCancelRequest(request_id="cancel-a", task_id=a["task_id"])
+        receipt = await runtime.cancel(stop)
+        assert receipt["accepted"] and receipt["phase"] == "STOPPING"
+        with pytest.raises(ValueError, match="task_busy"):
+            await runtime.start(TaskRequest(request_id="too-early", plan=motion("C")))
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
+        request = TaskRequest(request_id="second", plan=motion("C"))
+        b = await runtime.start(request)
+        assert b["task_id"] != a["task_id"] and "supersedes" not in b
+        assert await runtime.start(request) == b
+        with pytest.raises(ValueError, match="stale_task"):
+            await runtime.cancel(TaskCancelRequest(request_id=new_id(), task_id=a["task_id"]))
+        assert await runtime.cancel(stop) == receipt
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         assert env.status(old_action).state == "CANCELLED"
+        assert runtime.task_status(a["task_id"])["state"] == "CANCELLED"
         assert env.executions == 2 and env.world.pose == "C"
     finally:
         await runtime.close()
@@ -214,7 +211,7 @@ async def test_replacement_new_id_and_old_controls_cannot_affect_it(make_env):
 
 
 @pytest.mark.parametrize("replacement_skill", ["move_named_pose", "speak"])
-async def test_unconfirmed_stop_cannot_execute_replacement(make_env, tmp_path, replacement_skill):
+async def test_unconfirmed_stop_cannot_start_new_task(make_env, tmp_path, replacement_skill):
     from wrs_agent.nodes.tts import make_mock_tts
 
     env = make_env(duration=0.1, fault="stop_unknown")
@@ -228,19 +225,15 @@ async def test_unconfirmed_stop_cannot_execute_replacement(make_env, tmp_path, r
                 w.active_action is not None and env.status(w.active_action).state == "RUNNING"
             ),
         )
-        await runtime.hold(TaskControl(request_id="hold", task_id=a["task_id"]))
+        await runtime.cancel(TaskCancelRequest(request_id="hold", task_id=a["task_id"]))
         replacement = (
             motion("C")
             if replacement_skill == "move_named_pose"
             else Plan(steps=[Step(step_id="say", skill="speak", args={"text": "must not start"})])
         )
-        request = TaskControl(request_id="replace", task_id=a["task_id"], replacement=replacement)
-        if runtime.hold_accepted:
-            await runtime.replace(request)
-            await eventually(runtime.snapshot, lambda s: s["state"] == "UNKNOWN")
-        else:
-            with pytest.raises(ValueError, match="unconfirmed"):
-                await runtime.replace(request)
+        await eventually(runtime.snapshot, lambda s: s["state"] == "UNKNOWN")
+        with pytest.raises(ValueError, match="task_busy"):
+            await runtime.start(TaskRequest(request_id="next", plan=replacement))
         assert env.executions == 1 and env.world.pose != "C"
         assert tts.executions == 0
     finally:
@@ -250,7 +243,7 @@ async def test_unconfirmed_stop_cannot_execute_replacement(make_env, tmp_path, r
 
 
 @pytest.mark.parametrize("late_failure", ["timeout", "failed_status"])
-async def test_late_action_failure_does_not_fence_or_overwrite_replacement(make_env, late_failure):
+async def test_late_action_failure_does_not_fence_or_overwrite_new_task(make_env, late_failure):
     from wrs_agent.schemas import ActionStatus
 
     env = make_env(duration=0.2)
@@ -272,10 +265,9 @@ async def test_late_action_failure_does_not_fence_or_overwrite_replacement(make_
     try:
         a = await runtime.start(TaskRequest(request_id="a", plan=motion()))
         await entered.wait()
-        await runtime.hold(TaskControl(request_id="hold", task_id=a["task_id"]))
-        b = await runtime.replace(
-            TaskControl(request_id="b", task_id=a["task_id"], replacement=motion("C"))
-        )
+        await runtime.cancel(TaskCancelRequest(request_id="hold", task_id=a["task_id"]))
+        await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
+        b = await runtime.start(TaskRequest(request_id="b", plan=motion("C")))
         await eventually(runtime.snapshot, lambda s: s["state"] == "RUNNING")
         epoch = env.epoch
         release.set()

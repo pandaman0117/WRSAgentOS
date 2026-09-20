@@ -14,12 +14,12 @@
 | 4 任务 | [tasks/02_cache_reuse.py](tasks/02_cache_reuse.py) | 重复目标复用计划，条件变化拒绝复用 | 同步，脚本化 Mock 模型 |
 | 5 虚拟机器人 | [tasks/03_wrs_scene.py](tasks/03_wrs_scene.py) | 同一套 API 操作真实 WRS 虚拟模型 | 同步，需要 WRS 依赖 |
 | 6 连接已有节点 | [tasks/04_connect.py](tasks/04_connect.py) | 启动和使用分开；退出客户端不关闭节点 | 同步，需要先启动 TTS |
-| 7 任务句柄 | [tasks/05_task_handles.py](tasks/05_task_handles.py) | 按 ID 查询、显式停止替换、区分规划和执行 | 同步，Mock |
+| 7 任务句柄 | [tasks/05_task_handles.py](tasks/05_task_handles.py) | 按 ID 查询、显式停止取消后创建新任务、区分规划和执行 | 同步，Mock |
 | 8 错误处理 | [tasks/06_errors_and_versions.py](tasks/06_errors_and_versions.py) | 查询合同版本、读取任务错误和动作拒绝原因 | 同步，Mock |
 | 9 核心开发 | [developer/01_zenoh_roundtrip.py](developer/01_zenoh_roundtrip.py) | LocalStack 启动了什么；程序怎样问答、收通知 | async，真实 Zenoh，逐步中文输出 |
-| 10 核心开发 | [developer/02_mock_interrupt.py](developer/02_mock_interrupt.py) | 挂起模型、拒绝旧命令、持物停止、替换任务 | async，故障验证 |
+| 10 核心开发 | [developer/02_mock_interrupt.py](developer/02_mock_interrupt.py) | 挂起模型、拒绝旧命令、持物停止、取消后创建新任务任务 | async，故障验证 |
 | 11 模型接入 | [developer/03_glm_adapter.py](developer/03_glm_adapter.py) | 查看 GLM 原生响应怎样变成计划 | async，默认离线 HTTP 夹具 |
-| 12 语音控制 | [tasks/07_voice_control.py](tasks/07_voice_control.py) | 识别文本、任务停止、显式替换、规划结果 | 同步，文本输入，不使用麦克风 |
+| 12 语音控制 | [tasks/07_voice_control.py](tasks/07_voice_control.py) | 识别文本、任务停止、显式取消后创建新任务、规划结果 | 同步，文本输入，不使用麦克风 |
 | 13 节点和技能开发 | [developer/05_custom_skill.py](developer/05_custom_skill.py) | 独立自定义 TTS 进程、共享 greet 合同、Runtime 调度和取消 | async，真实 Zenoh，控制台输出 |
 | 14 GLM 完整链路 | [developer/06_glm_runtime.py](developer/06_glm_runtime.py) | GLM 原生回复经过 Runtime 执行与验证 | async，默认离线 HTTP 夹具 + Mock 节点 |
 
@@ -82,7 +82,7 @@ Task 是一次确定计划的执行；Skill 是能力名称，Action 是这次�
 05 自动启动自己的 router、自定义 TTS 节点和 Agent，验证完清理。实现拆成
 [custom_speech.py](developer/custom_speech.py)（合同和处理函数）、
 [04_custom_node.py](developer/04_custom_node.py)（明确的本地节点入口）与
-[custom_speech.toml](developer/custom_speech.toml)（绑定）。它们替换既定 TTS 角色，无自动插件发现。
+[custom_speech.toml](developer/custom_speech.toml)（绑定）。它们取消后创建新任务既定 TTS 角色，无自动插件发现。
 
 需要手工连接时，两终端设置相同的 WRS_AGENT_TOKEN，再分别运行：
 

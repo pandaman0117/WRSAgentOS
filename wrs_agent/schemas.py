@@ -47,7 +47,7 @@ class ErrorInfo(Boundary):
 
 
 class Envelope(Boundary):
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     message_id: Name = Field(default_factory=new_id)
     trace_id: Name = Field(default_factory=new_id)
     source: Name
@@ -120,7 +120,7 @@ class ControlReceipt(Boundary):
     accepted: bool
     reason: str = ""
     control_epoch: Counter
-    phase: Literal["REJECTED", "STOPPING", "STOPPED", "UNKNOWN", "RESUMED"]
+    phase: Literal["REJECTED", "STOPPING", "STOPPED", "UNKNOWN", "ACTIONS_ALLOWED"]
     error: ErrorInfo | None = None
 
 
@@ -223,10 +223,9 @@ class TaskRequest(Boundary):
     plan: Plan
 
 
-class TaskControl(Boundary):
+class TaskCancelRequest(Boundary):
     request_id: Name
     task_id: Name
-    replacement: Plan | None = None
 
 
 class IdRequest(Boundary):
@@ -261,9 +260,8 @@ class GoalQuery(Boundary):
 
 class TaskStatus(Boundary):
     task_id: Name
-    supersedes: Name | None = None
     state: Literal[
-        "QUEUED", "RUNNING", "RESUMING", "HELD", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"
+        "QUEUED", "RUNNING", "CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"
     ]
     reason: str = ""
     steps: dict[str, str] = Field(default_factory=dict)
@@ -271,10 +269,10 @@ class TaskStatus(Boundary):
     error: ErrorInfo | None = None
 
 
-class TaskHoldReceipt(Boundary):
+class TaskCancelReceipt(Boundary):
     task_id: Name
     revision: Literal[0] = 0
-    state: Literal["HELD", "UNKNOWN"]
+    state: Literal["CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"]
     accepted: bool
     phase: Literal["STOPPING", "STOPPED", "UNKNOWN"]
     error: ErrorInfo | None = None

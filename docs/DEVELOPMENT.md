@@ -1,27 +1,25 @@
 # 开发交接：先跑通，再替换后端
 
-当前交付的是可以继续分工开发的软件 V1：任务调度、按资源停止与替换、任务句柄、节点目录、技能合同、GLM 非流式适配已经连接起来。默认用真实 Zenoh、多进程 Mock 节点验收；WRS 另有真实 Lite6 模型的虚拟 FK 示例。context 保持现状，先把后端接入做好。
+当前交付的是可以继续分工开发的软件 V1：任务调度、按资源取消与停止确认、任务句柄、节点目录、技能合同、GLM 非流式适配已经连接起来。默认用真实 Zenoh、多进程 Mock 节点验收；WRS 另有真实 Lite6 模型的虚拟 FK 示例。context 保持现状，先把后端接入做好。
 
 ## 一次看清系统
 
 ```text
-ASR / UI / Python 脚本
-  | send_text / start / goal / task(id)
-  v
-Voice：识别文本分类、明确停止走控制路径
-  |                          |
-  v                          v
-Agent Runtime <-> Planner（Mock / GLM）
-  |  校验计划、调度、保存任务与规划身份
-  +-------------------+
-  v                   v
-WRS 节点              TTS 节点
-Environment           独立动作执行器
-  |                   |
-机器人模型/设备        播音后端
+UI / Python 脚本 ---- start / goal / task(id) ---> Agent 节点
+  |                                               Runtime <-> Planner
+  | send_text                                     |  按依赖、资源调度
+  v                                               v
+Voice 节点：文本分类、明确停止 -> Runtime 控制入口    WRS 节点 / TTS 节点
+  | 停止播报                                      Environment / 播音后端
+  +---------------------------------------------> TTS 控制入口
+
+UI / Python 脚本 ---- action(...) ----------------> 对应动作节点
+ASR 后端 ---------- 已识别文本 -------------------> Voice 文本入口
 ```
 
 Zenoh 传输消息；Runtime 协调任务；动作节点负责最终准入与实际停止确认。普通查询、进度和节点控制不经过模型。一个 Skill 定义参数、资源、能力要求和验证条件；Node 声明实现了哪些技能版本；TOML 指定本系统允许把技能交给哪个节点。
+
+Voice 和 Agent 已是独立 Zenoh 节点；Planner 是 Agent 内部可替换接口，当前无需再拆进程。Module/Stream 等概念取舍见 [节点与消息](NODES_AND_MESSAGES.md)。
 
 当前明确配置、每种角色一个实例，支持配置节点独立上下线；不自动接纳网络上的新节点或新技能，不实现任意插件加载、跨机器设备所有权服务或多实例负载均衡。同一物理设备只有一个控制所有者。
 
@@ -48,7 +46,7 @@ Zenoh 传输消息；Runtime 协调任务；动作节点负责最终准入与实
 | WRS | `wrs_agent/env/wrs.py`、`examples/tasks/03_wrs_scene.py`、[WRS 审计](WRS_AUDIT.md) | 补一项有明确前置条件和结果验证的虚拟机器人能力，独立节点可查询、取消 | WRS 导入只在适配模块；不能把同步运动塞进控制循环 |
 | TTS | `examples/developer/custom_speech.py`、`wrs_agent/nodes/tts.py` | 将 console 后端换成本地播音，实现 speak、进度、按 action_id 取消、停止确认 | 不依赖 WRS，不另建动作协议；真实播放停止后才能报告停止 |
 | ASR | [识别文本合同](VOICE_INPUT.md)、`examples/tasks/07_voice_control.py` | 识别后的完整文本进入 send_text；部分识别不派发；明确停止不等模型 | 采集/识别独立运行；不把 VAD 当停止；不自动下载权重 |
-| UI | `wrs_agent/system.py`、[任务句柄](task_handles.md)、[错误合同](errors_and_versions.md) | 节点列表、文本输入、任务进度、显式停止和替换、UNKNOWN 展示 | 使用稳定 task_id；关闭观察不停止执行；状态与受理结果分开展示 |
+| UI | `wrs_agent/system.py`、[任务句柄](task_handles.md)、[错误合同](errors_and_versions.md) | 节点列表、文本输入、任务进度、取消、确认结束后创建新任务、UNKNOWN 展示 | 使用稳定 task_id；关闭观察不停止执行；状态与受理结果分开展示 |
 
 每项提交包含实现、一条可运行示例、正常完成/取消/故障证据。先用 Mock 把接口联调，再接各自真实依赖。不要同时修改协议、Runtime 调度和后端；如果现有合同无法表达能力，先提出具体缺失字段与行为。
 
@@ -111,7 +109,7 @@ UI 可使用 `System.connect()` 的异步入口，使等待任务进度与用户
 | 自然语言目标 | `goal(text)` → GoalHandle |
 | ASR/文本输入 | `send_text(...)` → TextReceipt |
 | 重连观察 | `task(task_id)`、`planning(request_id)` |
-| 任务进度/停止/修改 | 句柄的 `status/watch/hold/replace` |
+| 任务进度/取消 | 句柄的 `status/watch/wait/cancel` |
 
 状态结果主要是类型化对象；`system.status()` 的 Runtime 总览、`nodes()` 目录仍为字典。不要假设每个返回值都有相同字段。错误读取 error.code，UNKNOWN 要保留并显示。浏览器项目可随后在独立服务中包装这些 API；本轮不引入 Web 框架、前端依赖或新的控制协议。
 

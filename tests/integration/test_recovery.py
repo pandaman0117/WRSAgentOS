@@ -71,14 +71,15 @@ async def test_stop_during_reobserve_prevents_retry():
         )
         current = await stack.system.clients["wrs"].transport.request("request/task/status", {})
         await stack.system.clients["wrs"].transport.request(
-            "request/task/hold",
+            "request/task/cancel",
             {"request_id": new_id(), "task_id": current["task_id"]},
             control=True,
         )
         node = stack.system.clients["wrs"]
         await eventually(node.snapshot, lambda w: w.stop_confirmed)
         final = await stack.system.clients["wrs"].transport.request("request/task/status", {})
-        assert final["state"] == "HELD"
+        final = await eventually(stack.system.status, lambda s: s["state"] == "CANCELLED")
+        assert final["state"] == "CANCELLED"
         assert len(final["action_history"]) == 3
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"

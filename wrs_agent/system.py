@@ -199,15 +199,15 @@ class System:
             raise ValueError("node_snapshot_unsupported")
         return await self.clients[node].snapshot()
 
-    async def resume(self, node=None):
-        """Explicit admission only. This never resumes an old action."""
+    async def allow_actions(self, node=None):
+        """Allow new robot actions after confirmed stop; never continue an old action."""
         node = node or self._role("wrs")
         if self.definitions.get(node, {}).get("type") != "wrs" or node not in self.clients:
-            raise ValueError("robot_resume_unsupported")
+            raise ValueError("robot_allow_actions_unsupported")
         client = self.clients[node]
         state = await client.snapshot(control=True)
         return await client.control(
-            "resume",
+            "allow_actions",
             ControlRequest(
                 interrupt_id=new_id(),
                 boot_id=state.boot_id,

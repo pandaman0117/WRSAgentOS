@@ -46,7 +46,7 @@ async def test_slow_fk_ack_is_not_stop_confirmation(tmp_path, monkeypatch):
         assert (await env.hold(hold)) == receipt
         assert env.snapshot().stop_confirmed is False
         assert env.status(request.action_id).state == "CANCELLING"
-        assert not (await env.resume(control(env, state_version=env.world.version))).accepted
+        assert not (await env.allow_actions(control(env, state_version=env.world.version))).accepted
         release.set()
         await env.runner
         assert env.status(request.action_id).state == "CANCELLED"
@@ -79,7 +79,7 @@ async def test_wrs_backend_error_is_unknown(tmp_path, monkeypatch):
         assert env.status(request.action_id).state == "UNKNOWN"
         assert env.snapshot().data.kinematics.valid is False
         assert not env.stop_confirmed and env.admission == "UNKNOWN"
-        assert not (await env.resume(control(env, state_version=env.world.version))).accepted
+        assert not (await env.allow_actions(control(env, state_version=env.world.version))).accepted
     finally:
         await env.close()
 
