@@ -120,7 +120,7 @@ async def test_local_registration_drives_validation_capabilities_and_execution(t
         await env.runner
         assert env.status(request.action_id).state == "SUCCEEDED"
         assert (await env.submit(request)).accepted
-        assert calls == ["mark"] and env.snapshot().data.pose == "B"
+        assert calls == ["mark"] and env.snapshot().data.robot.pose == "B"
     finally:
         await env.close()
 

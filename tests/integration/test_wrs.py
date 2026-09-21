@@ -27,10 +27,10 @@ async def request_for(node, *, pose="B", revision=0, skill="move_named_pose"):
 
 
 async def test_real_wrs_progress_query_completion_and_unsupported():
-    async with LocalStack(backend="wrs_virtual", duration=0.5) as stack:
+    async with LocalStack(backend="wrs", duration=0.5) as stack:
         node = stack.system.clients["wrs"]
         cap = await node.capabilities()
-        assert cap.backend == "wrs_virtual" and cap.verification == "wrs_fk"
+        assert cap.backend == "wrs" and cap.verification == "wrs_fk"
         assert not cap.hardware and not cap.controller_flush
         assert "pick" in cap.unsupported and "pick" not in cap.skills
         assert not (await submit_request(node, await request_for(node, skill="pick"))).accepted
@@ -41,16 +41,17 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         await eventually(lambda: node.status(request.action_id), lambda s: s.progress > 0)
         during = await node.snapshot()
         assert during.active_action == request.action_id
-        assert during.data.kinematics.source == "wrs_fk" and during.data.kinematics.valid
-        assert during.data.kinematics.joint_unit == "rad"
+        assert during.data.robot.kinematics.source == "wrs_fk"
+        assert during.data.robot.kinematics.valid
+        assert during.data.robot.kinematics.joint_unit == "rad"
         assert (await submit_request(node, request)).accepted
         result = await eventually(
             lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
         )
         assert result.state is ActionState.SUCCEEDED and result.verification == "PASS"
         final = await node.snapshot()
-        assert final.data.pose == "B"
-        assert final.data.kinematics.joints == pytest.approx([0.3, 0.2, 0.5, 0.0, 0.2, 0.0])
+        assert final.data.robot.pose == "B"
+        assert final.data.robot.kinematics.qs == pytest.approx([0.3, 0.2, 0.5, 0.0, 0.2, 0.0])
         events = []
         while (sample := subscriber.try_recv()) is not None:
             events.append(decode(sample.payload.to_bytes()))
@@ -69,7 +70,7 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
 @pytest.mark.parametrize("kind", ["cancel", "hold"])
 async def test_real_wrs_cancel_hold_allow_actions_and_old_epoch(kind):
     async with LocalStack(
-        backend="wrs_virtual", duration=1, bindings="tests/fixtures/actions.toml"
+        backend="wrs", duration=1, bindings="tests/fixtures/actions.toml"
     ) as stack:
         node = stack.system.clients["wrs"]
         request = await request_for(node)
@@ -90,7 +91,7 @@ async def test_real_wrs_cancel_hold_allow_actions_and_old_epoch(kind):
         assert (await node.status(request.action_id)).state == "CANCELLED"
         stopped = await node.snapshot()
         await asyncio.sleep(0.08)
-        assert (await node.snapshot()).data.kinematics.joints == stopped.data.kinematics.joints
+        assert (await node.snapshot()).data.robot.kinematics.qs == stopped.data.robot.kinematics.qs
         assert not (await submit_request(node, old)).accepted
         allow_actions = await node.control(
             "allow_actions",
@@ -108,7 +109,7 @@ async def test_real_wrs_cancel_hold_allow_actions_and_old_epoch(kind):
 
 
 async def test_runtime_schedules_real_wrs_node():
-    async with LocalStack(backend="wrs_virtual", duration=0.1) as stack:
+    async with LocalStack(backend="wrs", duration=0.1) as stack:
         plan = Plan(steps=[Step(step_id="home", skill="move_named_pose", args={"pose": "home"})])
         await stack.system.clients["wrs"].transport.request(
             "request/task/start", {"request_id": new_id(), "plan": plan.model_dump()}
@@ -118,11 +119,11 @@ async def test_runtime_schedules_real_wrs_node():
             lambda s: s["state"] in {"SUCCEEDED", "FAILED", "UNKNOWN"},
         )
         assert done["state"] == "SUCCEEDED"
-        assert (await stack.system.clients["wrs"].capabilities()).backend == "wrs_virtual"
+        assert (await stack.system.clients["wrs"].capabilities()).backend == "wrs"
 
 
 async def test_unsupported_wrs_step_prevents_partial_tts_side_effect():
-    async with LocalStack(backend="wrs_virtual", duration=0.1) as stack:
+    async with LocalStack(backend="wrs", duration=0.1) as stack:
         plan = Plan(
             steps=[
                 Step(step_id="say", skill="speak", args={"text": "starting"}),
@@ -139,3 +140,44 @@ async def test_unsupported_wrs_step_prevents_partial_tts_side_effect():
         assert set(stack.system.clients) == {"wrs", "tts"}
         for client in stack.system.clients.values():
             assert (await client.transport.request("request/health", {}))["executions"] == 0
+
+
+async def test_relative_motion_uses_actual_ik_fk_and_stops_at_task_boundary():
+    from wrs_agent import TaskState, step
+
+    async with LocalStack(backend="wrs", duration=0.2) as stack:
+        system = stack.system
+        ready = await system.action("move_named_pose", pose="B")
+        assert (await ready.wait()).state == "SUCCEEDED"
+        original = (await system.snapshot()).data.robot.kinematics.tcp_pos
+        for delta in ({"dz": 0.02}, {"dz": -0.02}, {"dy": 0.02}, {"dy": -0.02}):
+            before_state = (await system.snapshot()).data.robot.kinematics
+            before = before_state.tcp_pos
+            movement = await system.action("move_relative", **delta)
+            assert (await movement.wait()).state == "SUCCEEDED"
+            snapshot = await system.snapshot()
+            expected = [
+                value + delta.get(axis, 0)
+                for value, axis in zip(before, ("dx", "dy", "dz"), strict=True)
+            ]
+            assert snapshot.data.robot.kinematics.tcp_pos == pytest.approx(expected, abs=1e-4)
+            assert snapshot.data.robot.kinematics.tcp_name == "flange"
+            for row, old_row in zip(
+                snapshot.data.robot.kinematics.tcp_rotmat, before_state.tcp_rotmat, strict=True
+            ):
+                assert row == pytest.approx(old_row, abs=1e-4)
+            assert snapshot.data.robot.pose is None
+        assert (await system.snapshot()).data.robot.kinematics.tcp_pos == pytest.approx(original)
+
+        moving = step("move_relative", dz=0.02)
+        dependent = step("move_relative", dz=-0.02, after=moving)
+        task = await system.start(moving, dependent)
+        await eventually(task.status, lambda s: bool(s.active_actions))
+        assert (await task.cancel()).accepted
+        assert (await task.wait()).state is TaskState.CANCELLED
+        stopped = await system.snapshot()
+        await asyncio.sleep(0.3)
+        assert (await system.snapshot()).data.robot.kinematics == stopped.data.robot.kinematics
+        assert stopped.stop_confirmed
+        fresh = await system.start(step("move_named_pose", pose="B"))
+        assert (await fresh.wait()).state is TaskState.SUCCEEDED

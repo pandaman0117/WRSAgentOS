@@ -18,8 +18,10 @@ async def test_slow_fk_ack_is_not_stop_confirmation(tmp_path, monkeypatch):
         def read(self):
             owner_threads.add(threading.get_ident())
             return {
-                "joints": [0.0] * 6,
-                "tip_position": [0.0] * 3,
+                "qs": [0.0] * 6,
+                "tcp_name": "flange",
+                "tcp_pos": [0.0] * 3,
+                "tcp_rotmat": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 "observed_at_ns": 1,
                 "valid": True,
             }
@@ -61,8 +63,10 @@ async def test_wrs_backend_error_is_unknown(tmp_path, monkeypatch):
     class Model:
         def read(self):
             return {
-                "joints": [0.0] * 6,
-                "tip_position": [0.0] * 3,
+                "qs": [0.0] * 6,
+                "tcp_name": "flange",
+                "tcp_pos": [0.0] * 3,
+                "tcp_rotmat": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 "observed_at_ns": 1,
                 "valid": True,
             }
@@ -77,7 +81,7 @@ async def test_wrs_backend_error_is_unknown(tmp_path, monkeypatch):
         await env.submit(request)
         await env.runner
         assert env.status(request.action_id).state == "UNKNOWN"
-        assert env.snapshot().data.kinematics.valid is False
+        assert env.snapshot().data.robot.kinematics.valid is False
         assert not env.stop_confirmed and env.admission == "UNKNOWN"
         assert not (await env.allow_actions(control(env, state_version=env.world.version))).accepted
     finally:

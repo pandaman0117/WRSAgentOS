@@ -3,6 +3,8 @@
 import asyncio
 import copy
 import json
+import socket
+import ssl
 from pathlib import Path
 
 import httpx
@@ -20,7 +22,7 @@ from wrs_agent.planner.providers.glm import (
 )
 from wrs_agent.schemas import MAX_BYTES
 
-FIXTURE = Path(__file__).parents[2] / "examples" / "fixtures" / "glm_tool_call.json"
+FIXTURE = Path(__file__).parents[2] / "examples" / "models" / "fixtures" / "glm_tool_call.json"
 REQUEST = ModelRequest("put A in B", {"world": {}, "skills": []})
 
 
@@ -165,8 +167,9 @@ def test_unsupported_configuration_rejected(kwargs):
 def test_live_opt_in_and_required_environment(monkeypatch):
     monkeypatch.delenv("GLM_MODEL", raising=False)
     monkeypatch.delenv("GLM_API_KEY", raising=False)
-    with pytest.raises(ValidationError):
+    with pytest.raises(GLMError, match="^glm_model_missing$") as error:
         GLMConfig.from_env()
+    assert "GLM_MODEL" in error.value.error.message
     with pytest.raises(GLMError, match="glm_live_model_opt_in_required"):
         GLMClient(GLMConfig(model="fixture"))
     with pytest.raises(GLMError, match="glm_api_key_missing_or_invalid"):
@@ -233,7 +236,7 @@ async def test_network_failure_redacted():
 
     client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(fail))
     try:
-        with pytest.raises(GLMError, match="^glm_transport_error$"):
+        with pytest.raises(GLMError, match="^glm_connect_error$"):
             await client.complete(REQUEST)
     finally:
         await client.aclose()
@@ -249,5 +252,165 @@ async def test_oversized_reply_bounded_and_closed():
     try:
         with pytest.raises(GLMError, match="^glm_reply_too_large$"):
             await client.complete(REQUEST)
+    finally:
+        await client.aclose()
+
+@pytest.mark.parametrize(
+    "error_type,cause_type,expected",
+    [
+        (httpx.ConnectError, socket.gaierror, "glm_dns_error"),
+        (httpx.ConnectError, ssl.SSLCertVerificationError, "glm_tls_certificate_error"),
+        (httpx.ConnectError, ssl.SSLEOFError, "glm_tls_error"),
+        (httpx.ConnectError, None, "glm_connect_error"),
+        (httpx.ProxyError, None, "glm_proxy_error"),
+        (httpx.RemoteProtocolError, None, "glm_protocol_error"),
+        (httpx.ReadError, None, "glm_transport_error"),
+        (httpx.ReadTimeout, None, "glm_timeout"),
+    ],
+)
+async def test_network_causes_are_classified_without_disclosing_values(
+    error_type, cause_type, expected
+):
+    def fail(request):
+        error = error_type("private-key-and-proxy-details", request=request)
+        if cause_type is not None:
+            raise error from cause_type(1, "private-underlying-diagnostic")
+        raise error
+
+    client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(fail))
+    try:
+        with pytest.raises(GLMError, match=f"^{expected}$") as error:
+            await client.complete(REQUEST)
+        assert "private-" not in error.value.error.model_dump_json()
+        assert error.value.__suppress_context__
+    finally:
+        await client.aclose()
+
+
+def test_network_error_classification_handles_context_and_cycles():
+    from wrs_agent.planner.providers.glm import transport_error_code
+
+    error = httpx.ConnectError("private")
+    error.__context__ = socket.gaierror(11001, "private")
+    assert transport_error_code(error) == "glm_dns_error"
+    error.__context__ = error
+    assert transport_error_code(error) == "glm_connect_error"
+
+
+async def test_planning_example_reports_network_failure_and_cleans_up(monkeypatch):
+    import runpy
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from wrs_agent.processes import ROOT
+
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_BASE_URL", CODING_BASE_URL)
+    state = {"closed": False}
+
+    def fail(request):
+        raise httpx.ConnectError("private") from socket.gaierror(11001, "private")
+
+    client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(fail))
+
+    async def snapshot():
+        return SimpleNamespace(data=SimpleNamespace(model_dump=lambda: {}))
+
+    async def skills():
+        return []
+
+    @asynccontextmanager
+    async def stack(**kwargs):
+        try:
+            yield SimpleNamespace(system=SimpleNamespace(snapshot=snapshot, skills=skills))
+        finally:
+            state["closed"] = True
+
+    monkeypatch.setattr("wrs_agent.planner.providers.glm.GLMClient", lambda *a, **kw: client)
+    monkeypatch.setattr("wrs_agent.processes.LocalStack", stack)
+    entry = runpy.run_path(str(ROOT / "examples/models/01_plan.py"))
+    with pytest.raises(SystemExit, match="glm_dns_error") as error:
+        await entry["main"]()
+    assert "无法解析" in str(error.value) and "private" not in str(error.value)
+    assert state["closed"] and client._http.is_closed
+
+
+async def test_connection_check_sends_no_key_and_accepts_http_error_as_reachable(
+    monkeypatch, capsys
+):
+    import runpy
+
+    from wrs_agent.processes import ROOT
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        assert "authorization" not in request.headers
+        assert request.method == "GET"
+        assert not request.content
+        return httpx.Response(401)
+
+    monkeypatch.setenv("GLM_API_KEY", "private-key-that-must-not-be-sent")
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    entry = runpy.run_path(str(ROOT / "scripts/check_glm_connection.py"))
+    assert await entry["check"](CODING_BASE_URL, trust_env=False) == 0
+    assert len(requests) == 1
+    assert "private" not in capsys.readouterr().out
+
+@pytest.mark.parametrize(
+    "configured,expected", [("0", False), ("1", True), ("true", True), ("false", False)]
+)
+def test_explicit_environment_network_option(monkeypatch, configured, expected):
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_BASE_URL", CODING_BASE_URL)
+    monkeypatch.setenv("GLM_TRUST_ENV", configured)
+    assert GLMConfig.from_env().trust_env is expected
+
+
+def test_invalid_environment_network_option_is_safe(monkeypatch):
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_TRUST_ENV", "private-invalid-value")
+    with pytest.raises(GLMError, match="^glm_trust_env_invalid$") as error:
+        GLMConfig.from_env()
+    assert "private" not in error.value.error.model_dump_json()
+
+
+@pytest.mark.parametrize("trust_env", [False, True])
+async def test_live_client_proxy_selection_is_explicit_without_sending_requests(
+    monkeypatch, trust_env
+):
+    monkeypatch.setenv("GLM_API_KEY", "offline-key-no-request")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    client = GLMClient(GLMConfig(model="fixture", trust_env=trust_env), live_model=True)
+    try:
+        selected = client._http._transport_for_url(httpx.URL(CODING_BASE_URL))
+        assert (selected is not client._http._transport) is trust_env
+    finally:
+        await client.aclose()
+
+
+async def test_offline_fixture_never_uses_environment_proxy(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("SSL_CERT_FILE", "missing-test-certificate-file")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=reply_body())
+
+    transport = httpx.MockTransport(respond)
+    client = GLMClient(GLMConfig(model="fixture", trust_env=True), transport=transport)
+    try:
+        assert (await client.complete(REQUEST)).finish == "complete"
+        assert len(requests) == 1
     finally:
         await client.aclose()

@@ -34,6 +34,7 @@ enabled = false
 [skills]
 observe = "wrs"
 move_named_pose = "wrs"
+move_relative = "wrs"
 pick = "wrs"
 place = "wrs"
 verify = "wrs"

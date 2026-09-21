@@ -15,6 +15,7 @@ from wrs_agent.schemas import (
     ControlRequest,
     GoalState,
     Plan,
+    SceneData,
     Step,
     TaskCancelRequest,
     TaskRequest,
@@ -551,6 +552,10 @@ class Runtime:
         return (await self._attempt(step, node_name, task, authority))[0]
 
     def _recoverable_state(self, step, world, authority, task):
+        obj = (
+            world.data.objects.get(step.args.get("object"))
+            if isinstance(world.data, SceneData) else None
+        )
         return (
             self._active(task)
             and not self.closed
@@ -558,9 +563,11 @@ class Runtime:
             and world.admission == "OPEN"
             and world.stop_confirmed
             and world.active_action is None
-            and world.data.held_object is None
-            and world.data.objects.get(step.args.get("object")) not in {None, "gripper"}
-            and (world.data.kinematics is None or world.data.kinematics.valid)
+            and obj is not None
+            and obj.valid
+            and obj.location not in {None, "gripper"}
+            and world.data.robot.held_object is None
+            and (world.data.robot.kinematics is None or world.data.robot.kinematics.valid)
         )
 
     async def _attempt(self, step, node_name, task, authority=None):

@@ -3,7 +3,7 @@
 from wrs_agent import launch, step
 
 if __name__ == "__main__":
-    with launch(duration=0.5) as system:
+    with launch(backend="wrs", duration=0.5) as system:
         first = step("move_named_pose", pose="B")
         second = step("move_named_pose", pose="C", after=first)
         task = system.start(first, second)

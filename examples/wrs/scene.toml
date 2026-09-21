@@ -1,0 +1,18 @@
+# 位姿均在 world 坐标系，以米表示；这些是静态配置，不是视觉检测结果。
+frame_id = "world"
+
+[objects.table]
+label = "工作台"
+source = "configuration"
+pos = [0.25, 0.0, -0.04]
+rotmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+rgb = [0.55, 0.55, 0.6]
+geometry = { kind = "box", xyz_lengths = [0.8, 0.6, 0.06] }
+
+[objects.A]
+label = "红色方块"
+source = "configuration"
+pos = [0.35, 0.18, 0.02]
+rotmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+rgb = [0.85, 0.15, 0.1]
+geometry = { kind = "box", xyz_lengths = [0.06, 0.06, 0.06] }

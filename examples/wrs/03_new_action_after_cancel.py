@@ -5,7 +5,7 @@ import time
 from wrs_agent import ActionState, launch
 
 if __name__ == "__main__":
-    with launch(backend="wrs_virtual", duration=1.0) as system:
+    with launch(backend="wrs", duration=1.0) as system:
         motion = system.action("move_named_pose", pose="B")
         time.sleep(0.2)
         motion.cancel()

@@ -56,7 +56,7 @@ async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
         async def respond(request):
             entered.set()
             await gate.wait()
-            fixture = Path(__file__).parents[2] / "examples/fixtures/glm_tool_call.json"
+            fixture = Path(__file__).parents[2] / "examples/models/fixtures/glm_tool_call.json"
             return httpx.Response(200, content=fixture.read_bytes())
 
         provider = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(respond))

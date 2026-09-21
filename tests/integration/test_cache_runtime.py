@@ -12,7 +12,7 @@ from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, new_id
 
 pytestmark = pytest.mark.zenoh
-FIXTURE = Path(__file__).parents[2] / "examples/fixtures/glm_tool_call.json"
+FIXTURE = Path(__file__).parents[2] / "examples/models/fixtures/glm_tool_call.json"
 
 
 @pytest.mark.parametrize("fault", [None, "grasp"])

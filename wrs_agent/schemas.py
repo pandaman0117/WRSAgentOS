@@ -150,9 +150,16 @@ class ControlReceipt(Boundary):
 
 
 class KinematicState(Boundary):
-    joints: Annotated[list[float], Field(min_length=6, max_length=6)]
+    """WRS joint values and the named TCP pose, expressed in frame_id."""
+
+    qs: Annotated[list[float], Field(min_length=6, max_length=6)]
     joint_unit: Literal["rad"] = "rad"
-    tip_position: Annotated[list[float], Field(min_length=3, max_length=3)]
+    tcp_name: Name
+    tcp_pos: Annotated[list[float], Field(min_length=3, max_length=3)]
+    tcp_rotmat: Annotated[
+        list[Annotated[list[float], Field(min_length=3, max_length=3)]],
+        Field(min_length=3, max_length=3),
+    ]
     position_unit: Literal["m"] = "m"
     frame_id: Literal["world"] = "world"
     source: Literal["wrs_fk"] = "wrs_fk"
@@ -160,12 +167,66 @@ class KinematicState(Boundary):
     valid: bool = True
 
 
+Vector3 = Annotated[list[float], Field(min_length=3, max_length=3)]
+Rotation3 = Annotated[list[Vector3], Field(min_length=3, max_length=3)]
+
+
+class BoxGeometry(Boundary):
+    kind: Literal["box"] = "box"
+    xyz_lengths: Annotated[
+        list[Annotated[float, Field(gt=0, le=100)]], Field(min_length=3, max_length=3)
+    ]
+
+
+class ObjectData(Boundary):
+    """One identified object; absent pose/geometry means unknown, never identity."""
+
+    label: str = Field(default="", max_length=80)
+    pos: Vector3 | None = None
+    rotmat: Rotation3 | None = None
+    geometry: BoxGeometry | None = None
+    rgb: Annotated[
+        list[Annotated[float, Field(ge=0, le=1)]], Field(min_length=3, max_length=3)
+    ] = Field(default_factory=lambda: [0.6, 0.6, 0.6])
+    location: Name | None = None  # Symbolic location used by Mock pick/place.
+    source: Name
+    observed_at_ns: int | None = Field(default=None, gt=0)
+    valid: bool = True
+
+    @model_validator(mode="after")
+    def proper_rotation(self):
+        if self.rotmat is not None:
+            rows = self.rotmat
+            for i in range(3):
+                for j in range(3):
+                    dot = sum(a * b for a, b in zip(rows[i], rows[j], strict=True))
+                    if abs(dot - (1.0 if i == j else 0.0)) > 1e-4:
+                        raise ValueError("rotmat_must_be_orthonormal")
+            a, b, c = rows
+            determinant = (
+                a[0] * (b[1] * c[2] - b[2] * c[1])
+                - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])
+            )
+            if abs(determinant - 1.0) > 1e-4:
+                raise ValueError("rotmat_must_be_right_handed")
+        return self
+
+
 class RobotData(Boundary):
-    kind: Literal["robot"] = "robot"
     held_object: Name | None = None
-    objects: dict[Name, Name] = Field(default_factory=dict, max_length=128)
-    pose: Name | None = None
+    pose: Name | None = None  # Named joint configuration, not a geometric pose.
     kinematics: KinematicState | None = None
+
+
+class SceneData(Boundary):
+    """Latest accepted scene at capture time, not simultaneous sensor truth."""
+
+    kind: Literal["scene"] = "scene"
+    frame_id: Literal["world"] = "world"
+    position_unit: Literal["m"] = "m"
+    robot: RobotData
+    objects: dict[Name, ObjectData] = Field(default_factory=dict, max_length=32)
     facts: dict[Name, Scalar] = Field(default_factory=dict, max_length=32)
 
 
@@ -186,7 +247,7 @@ class NodeSnapshot(Boundary):
     admission: Literal["OPEN", "HELD", "UNKNOWN"]
     active_action: Name | None
     stop_confirmed: bool
-    data: Annotated[RobotData | SpeechData, Field(discriminator="kind")]
+    data: Annotated[SceneData | SpeechData, Field(discriminator="kind")]
 
 
 class ActionContext(NodeSnapshot):

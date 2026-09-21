@@ -3,8 +3,8 @@
 from wrs_agent import launch
 
 if __name__ == "__main__":
-    with launch() as system:
-        planning = system.goal("put A in B")
+    with launch(backend="wrs") as system:
+        planning = system.goal("home")
         proposed = planning.wait()
         print("规划结果：", proposed.state)
 

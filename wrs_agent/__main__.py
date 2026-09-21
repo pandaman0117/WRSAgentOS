@@ -16,9 +16,12 @@ async def main():
     parser.add_argument("--journal")
     parser.add_argument("--node-id")
     parser.add_argument("--bindings")
+    parser.add_argument("--scene", help="Initial WRS scene TOML (world coordinates)")
     parser.add_argument("--model-provider", choices=["mock", "glm"], default="mock")
     parser.add_argument("--live-model", action="store_true")
-    parser.add_argument("--backend", choices=["mock", "wrs_virtual"], default="mock")
+    parser.add_argument("--backend", choices=["mock", "wrs"], default="mock")
+    parser.add_argument("--tts-backend", choices=["mock", "qwen"], default="mock")
+    parser.add_argument("--tts-prepare", dest="tts_prepared_texts", action="append", default=[])
     parser.add_argument("--duration", type=float, default=0.4)
     parser.add_argument(
         "--deferred-planner",
@@ -49,6 +52,9 @@ async def main():
             site=args.site,
             env_id=args.env_id,
             backend=args.backend,
+            scene=args.scene,
+            tts_backend=args.tts_backend,
+            tts_prepared_texts=args.tts_prepared_texts,
             model_provider=args.model_provider,
             live_model=args.live_model,
             bindings=args.bindings,

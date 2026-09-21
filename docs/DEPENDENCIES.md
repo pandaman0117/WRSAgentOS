@@ -66,11 +66,17 @@ WRS 的 Python 导入与 Git submodule 是两件事。若目标 commit 有正确
 
 ## 5. 常规依赖与多环境
 
-core 与 WRS 使用 `D:\code\venv312\.venv\Scripts\python.exe`（3.12.0）。core 依赖位于项目 .local/deps，启动器以 -S 隔离共享 site-packages；WRS 探测子进程有意使用同一解释器已有科学依赖。版本见 WRS_AUDIT.md 和 reports/doctor.json。
+项目要求 Python 3.12。本机开发验证使用 `D:\code\venv312\.venv\Scripts\python.exe`（3.12.0），这个绝对路径不是其他机器的运行要求。Windows 的 run.ps1/bootstrap.ps1 默认调用当前 `python`；如需明确选择，设置 `$env:WRS_AGENT_PYTHON = "本机 Python 3.12 的路径"`。
+
+普通虚拟环境中的 Runtime 子进程继承 `sys.executable` 并正常加载该环境的 site-packages。使用 `python -X utf8 -S scripts/run.py ...` 时，子进程保留相同的开发隔离模式，通过 scripts/run.py 加载项目 .local/deps。WRS adapter 通过标准库 site 获取当前平台的科学包路径，仅追加路径，不执行 .pth。版本见 WRS_AUDIT.md 和 reports/doctor.json。
 
     ./scripts/bootstrap.ps1
     ./scripts/install_router.ps1
     ./scripts/run.ps1 scripts/doctor.py --probe-wrs
+
+Router 查找顺序是 `WRS_AGENT_ZENOHD` 指定的文件、仓库 `.local/zenoh-1.9.0/zenohd.exe`（Windows）或 `zenohd`（POSIX）、系统 PATH 中的 zenohd。显式路径无效时直接报错，不回退到另一份程序；启动前始终核对版本 1.9.0。可执行文件路径含空格时也作为一个独立参数传递。
+
+PowerShell 安装脚本只覆盖 Windows x64。Linux/macOS 需准备对应平台的依赖和 Router；启动器已使用 POSIX 文件锁，但这些平台尚未实际验收。当前仍以源码 checkout 运行，configs、scripts 与 .local/runs 位于仓库中，未验证独立 wheel 部署。
 
 bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，再同步至 .local/deps。router 固定官方 1.9.0 并校验 SHA256。脚本可重跑，不更新 WRS 远程指针、不修改共享环境。
 
@@ -87,3 +93,10 @@ bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，
 2026-09-17：GLM 使用 httpx 异步客户端直接发送 OpenAI 兼容 JSON；原计划 openai SDK 为候选，未引入。可运行 `./scripts/bootstrap.ps1 -Extra glm`；锁文件由 uv 0.12.15 重新生成，不修改共享 Python。只有非流式/auto 工具模式经离线协议测试，真实账号模型及 GLM TTS 未验证。
 
 M3 科学包路径补充：指定 venv 的 pyvenv.cfg 设置 include-system-site-packages=true。WRS adapter 仅在自己的进程向 sys.path 后部追加该 venv 与基础解释器的 site-packages；项目锁定 core 包优先，固定 WRS submodule 位于前部并检查真实模块路径。不执行 .pth、不升级或修改共享包。M3 干净机器科学依赖重建仍未验证。
+
+## Qwen 语音可选依赖
+
+实际选用 Qwen3-ASR-0.6B、Qwen3-TTS-12Hz-0.6B-CustomVoice；qwen-asr 0.0.6 / qwen-tts 0.1.1 官方包的 Transformers 精确依赖冲突，通过互斥 uv extras 与两个 .local/venvs 环境隔离。Torch/Torchaudio 2.9.0 CU128；核心默认依赖不增加模型 SDK。固定模型资源、校验与安装入口见 [Qwen 语音指南](QWEN_SPEECH.md)。普通 pip 也可分别安装两个 extra，但复现版本以 uv.lock 与 setup_speech.ps1 为准。
+
+
+2026-09-22：用户明确要求将 ASR 装入已有 `D:\code\venv312\.venv`。使用 uv pip install 增量安装 qwen-asr 0.0.6、torchaudio 2.9.0+cu128、sounddevice 0.5.6，并约束保留已有可见依赖；未对该共享环境运行 sync。Transformers 4.57.6 要求 huggingface-hub<1，因此仅将已有 hub 1.3.2 调整为 0.36.2，其余原包保留。SDK/语音依赖仍在 pyproject 的 qwen-asr extra 中；默认 setup_speech.ps1 继续提供隔离安装，TTS 使用原独立环境。共享环境已有两项与此次无关的缺失：joycon-robotics 的 hid 与 scipy-stubs 的 optype；安装后未新增依赖检查错误。

@@ -11,6 +11,8 @@ dependencies = ["eclipse-zenoh==1.9.0", "pydantic>=2.12,<3"]
 
 [project.optional-dependencies]
 glm = ["httpx>=0.28,<0.29"]
+qwen-tts = ["qwen-tts==0.1.1", "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6"]
+qwen-asr = ["qwen-asr==0.0.6", "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6"]
 
 [dependency-groups]
 dev = ["httpx>=0.28,<0.29", "pytest>=9,<10", "pytest-asyncio>=1,<2", "ruff>=0.15,<1"]
@@ -19,6 +21,7 @@ dev = ["httpx>=0.28,<0.29", "pytest>=9,<10", "pytest-asyncio>=1,<2", "ruff>=0.15
 include = ["wrs_agent*"]
 
 [tool.setuptools.package-data]
+"wrs_agent.speech" = ["assets.json"]
 "wrs_agent.skills" = ["README.md", "*/SKILL.md"]
 
 [tool.pytest.ini_options]
@@ -39,3 +42,17 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 [tool.ruff.lint.per-file-ignores]
 "wrs_agent/transport.py" = ["ASYNC109"]
 "tests/conftest.py" = ["ASYNC109"]
+
+# The upstream speech packages pin incompatible Transformers versions.
+# Install these extras into separate environments; nodes already communicate over Zenoh.
+[tool.uv]
+conflicts = [[{ extra = "qwen-tts" }, { extra = "qwen-asr" }]]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]

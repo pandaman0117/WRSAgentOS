@@ -10,7 +10,7 @@ BINDINGS = Path(__file__).resolve().parents[2] / "configs/robot.toml"
 
 
 async def main():
-    async with LocalStack(bindings=BINDINGS, duration=0.5) as stack:
+    async with LocalStack(backend="wrs", bindings=BINDINGS, duration=0.5) as stack:
         robot = stack.system.clients["wrs"]
         events = robot.transport.subscribe("events/action", capacity=8)
         motion = await stack.system.action("move_named_pose", pose="B")

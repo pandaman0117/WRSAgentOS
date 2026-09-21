@@ -30,18 +30,23 @@ async def serve_node(
     journal=None,
     duration=0.4,
     backend="mock",
+    scene=None,
     model_provider="mock",
     live_model=False,
     deferred_planner=False,
     fault=None,
     action_factory=None,
+    tts_backend="mock",
+    tts_prepared_texts=(),
 ):
     """Serve until shutdown; a local action_factory receives only its journal path."""
     if role not in {"wrs", "tts", "agent", "voice"}:
         raise ValueError("unsupported_node_role")
     if action_factory is not None and role not in {"wrs", "tts"}:
         raise ValueError("action_factory_requires_action_node")
-    if backend not in {"mock", "wrs_virtual"}:
+    if tts_backend not in {"mock", "qwen"}:
+        raise ValueError("unsupported_tts_backend")
+    if backend not in {"mock", "wrs"}:
         raise ValueError("unsupported_backend")
     if model_provider not in {"mock", "glm"} or (
         model_provider == "glm" and (not live_model or deferred_planner)
@@ -49,6 +54,8 @@ async def serve_node(
         raise ValueError("invalid_model_provider_or_missing_live_opt_in")
     if not 0 < duration <= 30:
         raise ValueError("invalid_duration")
+    if scene is not None and (role != "wrs" or backend != "wrs" or action_factory is not None):
+        raise ValueError("scene_requires_wrs_backend")
     definitions, skill_bindings = load_bindings(bindings)
     node_id = node_id or role
     definition = definitions.get(node_id)
@@ -82,12 +89,16 @@ async def serve_node(
                 owner = action_factory(journal)
                 if inspect.isawaitable(owner):
                     owner = await owner
-            elif role == "wrs" and backend == "wrs_virtual":
+            elif role == "wrs" and backend == "wrs":
                 from wrs_agent.env.wrs import make_wrs_environment
 
-                owner = await make_wrs_environment(journal, duration=duration)
+                owner = await make_wrs_environment(journal, duration=duration, scene=scene)
             elif role == "wrs":
                 owner = make_mock_environment(journal, duration=duration, fault=fault)
+            elif tts_backend == "qwen":
+                from wrs_agent.speech.tts import make_qwen_tts
+
+                owner = await make_qwen_tts(journal, prepared_texts=tts_prepared_texts)
             else:
                 owner = make_mock_tts(journal, duration=duration)
             register_actions(transport, owner)

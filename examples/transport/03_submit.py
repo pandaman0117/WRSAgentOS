@@ -9,7 +9,7 @@ BINDINGS = Path(__file__).resolve().parents[2] / "configs/robot.toml"
 
 
 async def main():
-    async with LocalStack(bindings=BINDINGS) as stack:
+    async with LocalStack(backend="wrs", bindings=BINDINGS) as stack:
         robot = stack.system.clients["wrs"]
         context = await robot.context()
         motion = await robot.submit(

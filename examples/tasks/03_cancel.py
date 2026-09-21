@@ -3,7 +3,7 @@
 from wrs_agent import TaskState, launch, step
 
 if __name__ == "__main__":
-    with launch(duration=1.0) as system:
+    with launch(backend="wrs", duration=1.0) as system:
         task = system.start(step("move_named_pose", pose="B"))
         for status in task.watch():
             if status.active_actions:

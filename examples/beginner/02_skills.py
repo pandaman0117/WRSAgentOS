@@ -3,6 +3,6 @@
 from wrs_agent import launch
 
 if __name__ == "__main__":
-    with launch() as system:
+    with launch(backend="wrs") as system:
         for skill in system.skills():
             print(skill.name, "版本", skill.version, "—", skill.description)

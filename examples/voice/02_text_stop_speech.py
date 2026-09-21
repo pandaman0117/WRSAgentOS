@@ -5,7 +5,7 @@ import time
 from wrs_agent import launch
 
 if __name__ == "__main__":
-    with launch(duration=2.0) as system:
+    with launch(backend="wrs", duration=2.0) as system:
         motion = system.action("move_named_pose", pose="B")
         speech = system.action("speak", text="我正在向 B 移动。")
         time.sleep(0.2)

@@ -1,0 +1,31 @@
+# launch() starts enabled nodes; skills bind to explicit node IDs.
+# Python still owns process supervision, endpoint selection, and credentials.
+[nodes.wrs]
+type = "wrs"
+suffix = ""
+actions = true
+enabled = true
+
+[nodes.tts]
+type = "tts"
+suffix = "-tts"
+actions = true
+enabled = true
+
+[nodes.agent]
+type = "agent"
+suffix = ""
+actions = false
+enabled = true
+
+[nodes.voice]
+type = "voice"
+suffix = "-voice"
+actions = false
+enabled = true
+
+[skills]
+observe = "wrs"
+move_named_pose = "wrs"
+move_relative = "wrs"
+speak = "tts"

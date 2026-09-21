@@ -22,7 +22,7 @@ LOG_LINE = b"2026-09-17T03:12:20.445133Z  INFO main ThreadId(01) zenohd: " + VER
 )
 def test_router_version_accepts_pinned_version_with_logging(output):
     with patch("wrs_agent.processes.subprocess.check_output", return_value=output) as probe:
-        check_router_version()
+        check_router_version(ROUTER)
     probe.assert_called_once_with([str(ROUTER), "--version"], timeout=5, creationflags=NO_WINDOW)
 
 
@@ -43,7 +43,7 @@ def test_router_version_rejects_mismatch_with_diagnostics(output):
         patch("wrs_agent.processes.subprocess.check_output", return_value=output),
         pytest.raises(RuntimeError, match="zenohd_version_mismatch") as error,
     ):
-        check_router_version()
+        check_router_version(ROUTER)
     assert "expected 1.9.0" in str(error.value)
     assert str(ROUTER) in str(error.value)
     assert repr(output.decode().strip()) in str(error.value)
@@ -62,7 +62,7 @@ def test_router_version_probe_failure_is_not_accepted(error):
         patch("wrs_agent.processes.subprocess.check_output", side_effect=error),
         pytest.raises(type(error)),
     ):
-        check_router_version()
+        check_router_version(ROUTER)
 
 
 @pytest.mark.parametrize(
@@ -72,6 +72,7 @@ def test_router_version_probe_failure_is_not_accepted(error):
         ["agent", "--model-provider", "glm", "--live-model", "--deferred-planner"],
         ["wrs", "--duration", "0"],
         ["wrs", "--backend", "hardware"],
+        ["wrs", "--backend", "wrs_virtual"],
     ],
 )
 async def test_cli_rejects_unsafe_configuration_before_starting(monkeypatch, arguments):
@@ -158,6 +159,7 @@ def test_local_namespace_rejected_before_creating_files_or_processes(env_id):
         ("unknown", {}, "unsupported_node_role"),
         ("agent", {"action_factory": lambda journal: None}, "action_factory_requires"),
         ("wrs", {"backend": "hardware"}, "unsupported_backend"),
+        ("wrs", {"backend": "wrs_virtual"}, "unsupported_backend"),
         ("wrs", {"duration": 0}, "invalid_duration"),
         ("agent", {"model_provider": "glm"}, "missing_live_opt_in"),
         (
@@ -179,17 +181,145 @@ async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role
         await serve_node(role, **options)
 
 
-@pytest.mark.parametrize("filename", ["03_plan_live.py", "04_execute_live.py"])
-async def test_live_model_examples_require_code_opt_in(monkeypatch, filename):
+@pytest.mark.parametrize("filename", ["01_plan.py", "02_execute.py"])
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("GLM_MODEL", None),
+        ("GLM_MODEL", ""),
+        ("GLM_MODEL", " \t"),
+        ("GLM_MODEL", "private-invalid-model!"),
+        ("GLM_MODEL", "x" * 129),
+        ("GLM_BASE_URL", "https://private-invalid-endpoint.example"),
+        ("GLM_API_KEY", None),
+    ],
+    ids=["missing-model", "empty-model", "blank-model", "invalid-model",
+         "long-model", "invalid-endpoint", "missing-key"],
+)
+async def test_online_model_examples_reject_invalid_config_before_launch(
+    monkeypatch, filename, variable, value
+):
     import runpy
 
+    from wrs_agent.planner.providers.glm import CODING_BASE_URL
     from wrs_agent.processes import ROOT
 
-    def unexpected(*args, **kwargs):
-        pytest.fail("Default live example must not create a model or launch nodes")
+    monkeypatch.setenv("GLM_API_KEY", "private-offline-test-key")
+    monkeypatch.setenv("GLM_MODEL", "test-model")
+    monkeypatch.setenv("GLM_BASE_URL", CODING_BASE_URL)
+    if value is None:
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, value)
 
-    monkeypatch.setattr("wrs_agent.planner.providers.glm.GLMClient", unexpected)
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid configuration must fail before creating clients or launching nodes")
+
+    monkeypatch.setattr("httpx.AsyncClient", unexpected)
     monkeypatch.setattr("wrs_agent.processes.LocalStack", unexpected)
     entry = runpy.run_path(str(ROOT / "examples/models" / filename))
-    with pytest.raises(SystemExit, match="ALLOW_LIVE_MODEL"):
+    with pytest.raises(SystemExit, match=variable) as error:
         await entry["main"]()
+    assert "private-" not in str(error.value)
+
+
+
+@pytest.mark.parametrize("name", ["../escape", "a/b", "", "x" * 201])
+def test_instance_lock_rejects_invalid_names(name):
+    from wrs_agent.processes import InstanceLock
+
+    with pytest.raises(ValueError, match="invalid_instance_name"):
+        InstanceLock(name)
+
+
+def test_router_override_takes_precedence_over_local_and_path(monkeypatch, tmp_path):
+    from wrs_agent import processes
+
+    explicit = tmp_path / "custom router"
+    local = tmp_path / "local router"
+    explicit.touch()
+    local.touch()
+    monkeypatch.setenv("WRS_AGENT_ZENOHD", str(explicit))
+    monkeypatch.setattr(processes, "ROUTER", local)
+
+    def unexpected(*args):
+        pytest.fail("An explicit router must not fall back to PATH")
+
+    monkeypatch.setattr(processes.shutil, "which", unexpected)
+    assert processes.router_path() == explicit.resolve()
+
+
+@pytest.mark.parametrize("configured", ["", "missing", "directory"])
+def test_invalid_router_override_does_not_fall_back(monkeypatch, tmp_path, configured):
+    from wrs_agent import processes
+
+    local = tmp_path / "local router"
+    local.touch()
+    monkeypatch.setattr(processes, "ROUTER", local)
+    if configured == "directory":
+        value = str(tmp_path)
+    elif configured:
+        value = str(tmp_path / configured)
+    else:
+        value = configured
+    monkeypatch.setenv("WRS_AGENT_ZENOHD", value)
+    with pytest.raises(FileNotFoundError, match="WRS_AGENT_ZENOHD"):
+        processes.router_path()
+
+
+def test_local_router_precedes_path(monkeypatch, tmp_path):
+    from wrs_agent import processes
+
+    local = tmp_path / "local router"
+    local.touch()
+    monkeypatch.delenv("WRS_AGENT_ZENOHD", raising=False)
+    monkeypatch.setattr(processes, "ROUTER", local)
+
+    def unexpected(*args):
+        pytest.fail("A local pinned router must take precedence over PATH")
+
+    monkeypatch.setattr(processes.shutil, "which", unexpected)
+    assert processes.router_path() == local
+
+
+def test_router_can_be_found_on_path(monkeypatch, tmp_path):
+    from wrs_agent import processes
+
+    executable = tmp_path / "PATH router"
+    executable.touch()
+    monkeypatch.delenv("WRS_AGENT_ZENOHD", raising=False)
+    monkeypatch.setattr(processes, "ROUTER", tmp_path / "absent")
+    monkeypatch.setattr(processes.shutil, "which", lambda name: str(executable))
+    assert processes.router_path() == executable.resolve()
+
+
+def test_missing_router_explains_configuration(monkeypatch, tmp_path):
+    from wrs_agent import processes
+
+    monkeypatch.delenv("WRS_AGENT_ZENOHD", raising=False)
+    monkeypatch.setattr(processes, "ROUTER", tmp_path / "absent")
+    monkeypatch.setattr(processes.shutil, "which", lambda name: None)
+    with pytest.raises(FileNotFoundError, match="zenohd 1.9.0 not found") as error:
+        processes.router_path()
+    assert "WRS_AGENT_ZENOHD" in str(error.value)
+    assert "PATH" in str(error.value)
+
+
+def test_version_check_uses_configured_router(monkeypatch, tmp_path):
+    from wrs_agent import processes
+
+    executable = tmp_path / "configured router"
+    executable.touch()
+    monkeypatch.setenv("WRS_AGENT_ZENOHD", str(executable))
+    with patch("wrs_agent.processes.subprocess.check_output", return_value=VERSION_LINE) as probe:
+        processes.check_router_version()
+    probe.assert_called_once_with(
+        [str(executable.resolve()), "--version"], timeout=5, creationflags=NO_WINDOW
+    )
+
+
+def test_removed_wrs_backend_name_fails_before_process_start():
+    from wrs_agent.processes import LocalStack
+
+    with pytest.raises(ValueError, match="unsupported_backend"):
+        LocalStack(backend="wrs_virtual")

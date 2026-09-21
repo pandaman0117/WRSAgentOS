@@ -1,6 +1,6 @@
 # 识别文本与任务中断
 
-Voice 接收已经识别出来的文本。录音、VAD、ASR 和界面属于输入端，Runtime 管任务，动作节点确认资源是否停止。当前没有麦克风采集或真实语音识别引擎。
+Voice 接收已经识别出来的文本。录音、VAD、ASR 和界面属于输入端，Runtime 管任务，动作节点确认资源是否停止。已提供本地 Qwen ASR 输入适配和循环收音示例；见 [Voice 示例](../examples/voice/README.md)。
 
 ## 最小调用
 
@@ -18,7 +18,7 @@ with launch() as system:
 执行中停止并等待结束的独立示例：
 
 ```powershell
-./scripts/run.ps1 examples/voice/01_stop_task.py
+./scripts/run.ps1 examples/voice/01_text_stop_task.py
 ```
 
 已有服务时使用 `connect()`；异步程序使用 `System.connect()` 和 `await system.send_text(...)`。客户端与服务共享 `WRS_AGENT_TOKEN`，默认只有受信本机入口。confidence 或文本里的角色说明不授予权限。
@@ -99,3 +99,7 @@ UI 展示 disposition、accepted、phase、task_id 和 error.code。UNKNOWN 展�
 底层 v4 端点是 Voice 的 `request/voice/text`、控制通道的 `request/voice/control_text`，以及 Agent 控制通道的 `request/task/interrupt`。服务端会重新检查控制意图，不能通过选择通道绕过规则；普通调用者使用 System API 即可。
 
 验收入口：`tests/unit/test_text_input.py`、`tests/integration/test_voice_text.py`。真实 ASR、播音完成/停止、嘈杂环境准确率和端到端延迟需要另行验证。
+
+## Qwen 中文输入适配
+
+已增加可选本地 `wrs_agent/speech/asr.py` 和完整 WRS 语音例子；麦克风及推理在输入客户端，Voice 仍消费已识别的文本。控制与固定方向命令的调用链、安装和局限见 [Qwen 语音指南](QWEN_SPEECH.md)。默认测试不会录音、下载模型或播放音频。

@@ -8,14 +8,36 @@ from hashlib import sha256
 from importlib.resources import files
 from typing import Literal
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from wrs_agent.errors import AgentError
-from wrs_agent.schemas import Boundary, Empty, Name, RobotData, SkillVersion, SpeechData
+from wrs_agent.schemas import (
+    Boundary,
+    Empty,
+    Name,
+    ObjectData,
+    RobotData,
+    SceneData,
+    SkillVersion,
+    SpeechData,
+)
 
 
 class MoveArgs(Boundary):
     pose: Literal["home", "B", "C"]
+
+
+class RelativeMoveArgs(Boundary):
+    dx: float = Field(default=0.0, ge=-0.05, le=0.05, description="World X displacement in meters")
+    dy: float = Field(default=0.0, ge=-0.05, le=0.05, description="World Y displacement in meters")
+    dz: float = Field(default=0.0, ge=-0.05, le=0.05, description="World Z displacement in meters")
+
+    @model_validator(mode="after")
+    def bounded_displacement(self):
+        distance_squared = self.dx**2 + self.dy**2 + self.dz**2
+        if not 0 < distance_squared <= 0.05**2 + 1e-12:
+            raise ValueError("displacement_must_be_nonzero_and_at_most_5cm")
+        return self
 
 
 class PickArgs(Boundary):
@@ -56,10 +78,12 @@ class VirtualWorld:
     calibration: str = "mock-v1"
 
     def snapshot(self):
-        return RobotData(
-            objects=self.objects.copy(),
-            held_object=self.held,
-            pose=self.pose,
+        return SceneData(
+            robot=RobotData(held_object=self.held, pose=self.pose),
+            objects={
+                name: ObjectData(location=location, source="mock")
+                for name, location in self.objects.items()
+            },
             facts={"calibration": self.calibration},
         )
 
@@ -81,6 +105,11 @@ def observe(world, args, stop, progress):
 def move_named_pose(world, args, stop, progress):
     world.pose = args.pose
     return world.pose == args.pose
+
+
+def move_relative(world, args, stop, progress):
+    # This contract requires an actual kinematic backend; Mock does not advertise it.
+    raise ValueError("kinematic_backend_required")
 
 
 def pick(world, args, stop, progress):
@@ -178,6 +207,17 @@ SKILLS = {
             ["移动", "回家", "move", "home"],
             ["motion"],
             preconditions=("known_pose",),
+        ),
+        _skill(
+            "move_relative",
+            RelativeMoveArgs,
+            move_relative,
+            "Offset the flange in world XYZ meters (up +Z, left +Y), at most 5 cm; "
+            "preserve endpoint orientation, joint-interpolated path without collision checking",
+            ["上", "下", "左", "右", "relative", "offset"],
+            ["motion"],
+            preconditions=("reachable_target",),
+            verification="wrs_fk",
         ),
         _skill(
             "pick",

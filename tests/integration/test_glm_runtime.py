@@ -17,7 +17,7 @@ from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import ActionRequest, ControlRequest, new_id
 
 pytestmark = pytest.mark.zenoh
-FIXTURE = Path(__file__).parents[2] / "examples/fixtures/glm_tool_call.json"
+FIXTURE = Path(__file__).parents[2] / "examples/models/fixtures/glm_tool_call.json"
 
 
 async def test_glm_plan_runs_on_remote_mock_nodes():
@@ -46,7 +46,7 @@ async def test_glm_plan_runs_on_remote_mock_nodes():
                 "request/task/goal", {"request_id": new_id(), "goal": "put A in B"}
             )
             await eventually(lambda: runtime.snapshot(), lambda s: s["state"] == "SUCCEEDED")
-            assert (await nodes["wrs"].snapshot()).data.objects["A"] == "B"
+            assert (await nodes["wrs"].snapshot()).data.objects["A"].location == "B"
             assert runtime.planner_calls == 1
         finally:
             await runtime.close()

@@ -3,15 +3,16 @@
 import asyncio
 from pathlib import Path
 
-from wrs_agent.processes import NO_WINDOW, ROUTER, check_router_version
+from wrs_agent.processes import NO_WINDOW, check_router_version, router_path
 
 CONFIG = Path(__file__).with_name("router.json5")
 
 
 async def main():
-    await asyncio.to_thread(check_router_version)
+    executable = router_path()
+    await asyncio.to_thread(check_router_version, executable)
     router = await asyncio.create_subprocess_exec(
-        str(ROUTER), "-c", str(CONFIG), creationflags=NO_WINDOW
+        str(executable), "-c", str(CONFIG), creationflags=NO_WINDOW
     )
     try:
         print("Router 地址：tcp/127.0.0.1:7448；请继续运行 01_start_speaker.py。", flush=True)

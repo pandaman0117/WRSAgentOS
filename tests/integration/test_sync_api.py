@@ -18,7 +18,7 @@ def test_sync_actions_run_in_parallel_while_caller_is_idle():
         time.sleep(0.7)
         assert speech.status().state is motion.status().state is ActionState.SUCCEEDED
         assert motion.wait().verification == "PASS"
-        assert system.snapshot().data.pose == "B"
+        assert system.snapshot().data.robot.pose == "B"
 
 
 def test_sync_wait_timeout_and_scoped_cancel_preserve_remote_control():
@@ -54,7 +54,7 @@ def test_sync_task_watch_dependencies_and_exception_cleanup():
             assert all(isinstance(status.state, TaskState) for status in states)
             assert states[-1].state is TaskState.SUCCEEDED
             assert system.status()["planner_calls"] == 0
-            assert system.snapshot().data.objects["A"] == "B"
+            assert system.snapshot().data.objects["A"].location == "B"
             raise LookupError("user_script_error")
     assert all(p.poll() is not None for p in processes)
     with pytest.raises(RuntimeError, match="closed"):
@@ -81,7 +81,9 @@ def test_sync_skill_lookup_uses_current_nodes_without_executing_or_planning():
         assert "caller-only-change" not in system.skills("播报")[0].aliases
         status = system.status()
         assert status["planner_calls"] == 0 and status["active_actions"] == {}
-        assert system.snapshot().data.objects == {"A": "table", "D": "table"}
+        assert {name: obj.location for name, obj in system.snapshot().data.objects.items()} == {
+            "A": "table", "D": "table"
+        }
 
 
 def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids():
@@ -101,4 +103,4 @@ def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids():
         history = result["action_history"]
         assert len({a["action_id"] for a in history}) == len(history) == 16
         assert len({a["task_id"] for a in history}) == 4
-        assert system.snapshot().data.objects["A"] == "C"
+        assert system.snapshot().data.objects["A"].location == "C"

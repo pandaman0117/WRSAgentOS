@@ -116,7 +116,7 @@ async def test_configured_node_can_join_after_connect_without_rebuilding_client(
                 assert [s.name for s in await client.skills("播报")] == ["speak"]
                 action = await client.action("speak", text="joined later")
                 assert (await action.wait()).state == "SUCCEEDED"
-                assert (await client.snapshot()).data.pose == "home"
+                assert (await client.snapshot()).data.robot.pose == "home"
             finally:
                 await tts.transport.request("request/tts/shutdown", {}, control=True)
                 await asyncio.to_thread(worker.wait, timeout=3)

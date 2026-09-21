@@ -1,0 +1,16 @@
+[nodes.wrs]
+type = "wrs"
+suffix = ""
+actions = true
+enabled = true
+
+[nodes.agent]
+type = "agent"
+suffix = ""
+actions = false
+enabled = true
+
+[skills]
+observe = "wrs"
+move_named_pose = "wrs"
+move_relative = "wrs"

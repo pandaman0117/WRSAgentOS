@@ -55,3 +55,30 @@ capabilities / snapshot / observe / move_named_pose / status / cancel / hold / r
 ## 2026-09-18：示例配置路径
 
 从 examples/developer 使用指定解释器和绝对路径 scripts/run.py 启动 01_zenoh_roundtrip.py，复现 configs/robot.toml 被解析到示例子目录，退出码 1；证据 reports/example_paths_before.txt。仓库根目录 configs/robot.toml 实际存在，04_connect.py 的 configs/tts.toml 也受同样的工作目录依赖影响。修复限定在这两个示例，以脚本位置确定配置绝对路径；API 显式相对路径继续相对于调用者工作目录。验证：39 项现有回归、6 次跨工作目录示例和 Ruff 通过；IDE 导入路径下直接启动也通过。证据 reports/example_paths_summary.json、example_paths.xml、example_paths_ide.txt；命令与限制见 ACCEPTANCE.md 文末。
+
+
+## 2026-09-21：方向移动与独立显示
+
+在原有 WRS 节点上添加 `move_relative(dx, dy, dz)`，世界坐标系、米、非零总位移 ≤ 5 cm。模型工作线程调用实际 Lite6 IK，以当前关节选取近邻解，检查关节限位及单关节变化 ≤ 1 rad，然后关节插值；末端目标朝向保持，完成后通过实际 FK 核对。不是笛卡尔直线规划，也不做碰撞/接触验证。不可达在修改模型前以 `relative_target_unreachable` 结束；求解期间停止会撤销授权，迟到 IK 不再驱动模型。
+
+显示模块从执行节点读取 boot_id 和真实关节快照，在另一份只读 WRS 显示模型中呈现。WRS 原生页面服务仅在回环监听，由 viewer 拥有和关闭；退出观察不取消远端动作，节点重启则要求重新连接。新入口见 [WRS 示例](../examples/README.md#wrs-虚拟机器人)。仍使用固定 submodule，无硬件连接。
+
+
+## 2026-09-21：后端名称澄清
+
+旧名 wrs_virtual 指的是实际调用 WRS Lite6 IK/FK 的仿真节点，不是 Mock。现统一为 `backend="wrs"`，CLI、启动器、节点能力声明和全部当前示例同步修改；旧选择值明确拒绝，不保留两种名字。能力中的 hardware=false、wrs_fk 和 virtual_fk_boundary 继续明确仿真边界，未新增实机控制能力。历史记录中的旧命令只供审计。
+
+07_viewer.py 直接展示 World/Lite6/坐标轴创建、读取节点快照、robot.fk、定时刷新和退出。show_wrs/create_viewer 包装删除，viewer_hub 只负责页面服务生命周期；可从示例本身读懂完整的显示流程。
+
+
+## 2026-09-22：具名 TCP 与状态命名
+
+核对 WRS 2bb014b747833c2fd9345115fbe26ffb11376f20：MechBase 使用 qs，TCP 提供 name/pos/rotmat/tf；Lite6 注册 flange TCP。运动学消息由 joints/tip_position 迁移为 qs/tcp_name/tcp_pos/tcp_rotmat。适配器读取具名 TCP，IK 显式传同一 TCP，到位验证也使用其 tf；不再用最后连杆的位置冒充工具点。现有 frame_id=world、米/弧度及启动/控制合同保留。
+
+此为运动学数据的破坏性字段迁移，配套服务/客户端/viewer 同步更新并重启；旧字段拒绝，不提供别名。RobotData.pose 仍仅表示 home/B/C 命名姿态，不等于几何位姿。完整场景字段取舍、并行相机和常驻 skill 设计见 [状态与感知](SCENE_AND_PERCEPTION.md)。SceneData/视觉/真实抓取属于后续方案，本轮未实现。
+
+## 2026-09-22：SceneData 实现审计
+
+已实现静态场景纵向切片，接续上节后续方案。固定 WRS 的 wss.Scene.add/remove 管理对象，wssop.box 接受 pos/rotmat/xyz_lengths/rgb/name，SceneObject.pos/rotmat 为世界位姿。适配器工作线程创建真实 Scene、Lite6 和方块；源数据经严格 TOML 校验后，快照中的已实例化物体位姿由 WRS 对象读回。无 geometry/rotmat 或 valid=False 时保留未知数据但不虚构显示实体。
+
+NodeSnapshot.data 现为 SceneData（或 SpeechData），RobotData 位于 data.robot。独立 viewer 只操作自己的 SceneObject，支持跟随快照创建、修改、移除显示对象；当前服务端物体来自启动配置，无在线更新入口。未调用 collider、GraspNet 或真实硬件，碰撞检查仍 False。配置无需依赖 WRS SDK 即可校验，未新增外部依赖。完整合同与示例见 SCENE_AND_PERCEPTION.md。

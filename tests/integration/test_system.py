@@ -124,7 +124,7 @@ async def test_runtime_resolves_renamed_node_from_configuration(tmp_path):
         task = await system.start(step("move_named_pose", pose="B"), step("speak", text="parallel"))
         assert (await task.wait()).state == "SUCCEEDED"
         world = await system.snapshot()
-        assert world.data.pose == "B" and world.node_id == "wrs_lite6"
+        assert world.data.robot.pose == "B" and world.node_id == "wrs_lite6"
         task = await system.start(step("move_named_pose", pose="C"))
         result = await system.agent.request(
             "request/task/cancel", {"request_id": new_id(), "task_id": task.id}, control=True

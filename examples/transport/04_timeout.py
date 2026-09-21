@@ -9,14 +9,14 @@ BINDINGS = Path(__file__).resolve().parents[2] / "configs/robot.toml"
 
 
 async def main():
-    async with LocalStack(bindings=BINDINGS) as stack:
+    async with LocalStack(backend="wrs", bindings=BINDINGS) as stack:
         transport = stack.system.clients["wrs"].transport
         try:
             await transport.request("request/missing", {}, timeout=0.2)
         except TimeoutError:
             print("查询超时，没有取消任何动作。")
         state = await stack.system.snapshot()
-        print("仍可查询机器人：", state.data.pose)
+        print("仍可查询机器人：", state.data.robot.pose)
 
 
 if __name__ == "__main__":

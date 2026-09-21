@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import runpy
 import secrets
+import shutil
 import socket
 import subprocess
 
@@ -78,27 +79,39 @@ async def test_persistent_system_example_and_separate_client(monkeypatch, tmp_pa
 async def test_custom_node_and_skill_run_from_another_working_directory(monkeypatch, tmp_path):
     token = secrets.token_urlsafe(32)
     monkeypatch.setenv("WRS_AGENT_TOKEN", token)
-    assert not port_open(7448), "Example port already in use; leave that service untouched"
-    entry = runpy.run_path(str(ROOT / "examples/nodes/00_start_router.py"))
+    # Keep the user's demo on 7448 untouched; run copies on a separate loopback port.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env_id = "node-demo-" + secrets.token_hex(6)
+    directory = tmp_path / "examples/nodes"
+    shutil.copytree(
+        ROOT / "examples/nodes", directory, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    for path in [*directory.glob("*.py"), directory / "router.json5"]:
+        text = path.read_text(encoding="utf-8")
+        text = text.replace("tcp/127.0.0.1:7448", f"tcp/127.0.0.1:{port}")
+        path.write_text(text.replace("node-demo", env_id), encoding="utf-8")
+    entry = runpy.run_path(str(directory / "00_start_router.py"))
     router = asyncio.create_task(entry["main"]())
     children, logs, buses = [], [], []
     try:
-        await eventually(lambda: port_open(7448), bool, timeout=10)
+        await eventually(lambda: port_open(port), bool, timeout=10)
         for filename in ("01_start_speaker.py", "02_start_agent.py"):
             log = (tmp_path / (filename + ".log")).open("w", encoding="utf-8")
             logs.append(log)
             children.append(
                 await asyncio.create_subprocess_exec(
-                    *python_command(ROOT / "examples/nodes" / filename),
+                    *python_command(directory / filename),
                     cwd=tmp_path,
                     stdout=log,
                     stderr=log,
                     creationflags=NO_WINDOW,
                 )
             )
-        speaker = Transport("tcp/127.0.0.1:7448", "local", "node-demo-speaker", token, "test")
+        speaker = Transport(f"tcp/127.0.0.1:{port}", "local", env_id + "-speaker", token, "test")
         buses.append(speaker)
-        agent = Transport("tcp/127.0.0.1:7448", "local", "node-demo", token, "test")
+        agent = Transport(f"tcp/127.0.0.1:{port}", "local", env_id, token, "test")
         buses.append(agent)
         capabilities = await wait_ready(speaker, "request/capabilities")
         assert "greet" in str(capabilities)
@@ -109,7 +122,7 @@ async def test_custom_node_and_skill_run_from_another_working_directory(monkeypa
             ("05_cancel.py", "CANCELLED"),
             ("03_call_skill.py", "SUCCEEDED"),
         ):
-            output = await run_client("examples/nodes/" + filename, tmp_path)
+            output = await run_client(directory / filename, tmp_path)
             assert state in output
             assert all(child.returncode is None for child in children)
         await agent.request("request/agent/shutdown", {}, control=True)
@@ -126,4 +139,4 @@ async def test_custom_node_and_skill_run_from_another_working_directory(monkeypa
         for log in logs:
             log.close()
         await stop_service(router)
-    assert not port_open(7448)
+    assert not port_open(port)

@@ -2,10 +2,12 @@
 
 import asyncio
 import os
+import socket
+import ssl
 from typing import Literal
 
 import httpx
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from wrs_agent.errors import AgentError
 from wrs_agent.planner import PlanDecision
@@ -25,16 +27,29 @@ class GLMConfig(Boundary):
     protocol: Literal["chat_completions"] = "chat_completions"
     tool_calling: Literal[True] = True
     stream: Literal[False] = False
+    trust_env: bool = False
     timeout_s: float = Field(default=20.0, gt=0, le=120)
     max_tokens: int = Field(default=2048, ge=128, le=8192)
 
     @classmethod
     def from_env(cls):
-        # Empty model is a configuration error, never an account capability guess.
-        return cls(
-            model=os.environ.get("GLM_MODEL", ""),
-            base_url=os.environ.get("GLM_BASE_URL", CODING_BASE_URL).rstrip("/"),
-        )
+        # Credentials and an endpoint do not identify an account's enabled model.
+        model = os.environ.get("GLM_MODEL", "")
+        if not model.strip():
+            raise GLMError("glm_model_missing")
+        trust_env = os.environ.get("GLM_TRUST_ENV", "0").strip().lower()
+        if trust_env not in {"", "0", "1", "false", "true"}:
+            raise GLMError("glm_trust_env_invalid")
+        try:
+            return cls(
+                model=model,
+                trust_env=trust_env in {"1", "true"},
+                base_url=os.environ.get("GLM_BASE_URL", CODING_BASE_URL).rstrip("/"),
+            )
+        except ValidationError as exc:
+            field = exc.errors(include_input=False)[0]["loc"][0]
+            code = "glm_model_invalid" if field == "model" else "glm_base_url_invalid"
+            raise GLMError(code) from None
 
 
 class GLMError(AgentError):
@@ -45,6 +60,31 @@ class GLMError(AgentError):
 
     def __str__(self):
         return self.code
+
+
+
+def transport_error_code(exc):
+    """Classify known causes without copying URLs, headers or exception messages."""
+    current = exc
+    seen = set()
+    for _ in range(12):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, socket.gaierror):
+            return "glm_dns_error"
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return "glm_tls_certificate_error"
+        if isinstance(current, ssl.SSLError):
+            return "glm_tls_error"
+        current = current.__cause__ or current.__context__
+    if isinstance(exc, httpx.ProxyError):
+        return "glm_proxy_error"
+    if isinstance(exc, httpx.ConnectError):
+        return "glm_connect_error"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "glm_protocol_error"
+    return "glm_transport_error"
 
 
 def request_body(request: ModelRequest, config: GLMConfig) -> dict:
@@ -148,14 +188,18 @@ class GLMClient:
         if not key or len(key) > 512 or not key.isascii() or any(c.isspace() for c in key):
             raise GLMError("glm_api_key_missing_or_invalid")
         self.config = config
+        network = transport
+        if network is None and not config.trust_env:
+            network = httpx.AsyncHTTPTransport(retries=1, trust_env=False)
         self._http = httpx.AsyncClient(
             base_url=config.base_url + "/",
             headers={"Authorization": f"Bearer {key}", "User-Agent": "WRS-Agent/0.1.0"},
             timeout=config.timeout_s,
             follow_redirects=False,
-            trust_env=False,
-            # A single connection retry; never retry received errors or partial responses.
-            transport=transport or httpx.AsyncHTTPTransport(retries=1),
+            # A custom HTTP transport disables HTTPX environment proxy discovery.
+            # Use its standard transport when the user opts into system proxy/CA settings.
+            trust_env=config.trust_env if transport is None else False,
+            transport=network,
         )
 
     async def complete(self, request: ModelRequest) -> ModelReply:
@@ -173,8 +217,8 @@ class GLMClient:
             return parse_reply(bytes(data))
         except (httpx.TimeoutException, TimeoutError):
             raise GLMError("glm_timeout") from None
-        except httpx.HTTPError:
-            raise GLMError("glm_transport_error") from None
+        except httpx.HTTPError as exc:
+            raise GLMError(transport_error_code(exc)) from None
 
     async def aclose(self) -> None:
         await self._http.aclose()

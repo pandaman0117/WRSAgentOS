@@ -4,10 +4,23 @@ from dataclasses import replace
 import pytest
 
 from wrs_agent.cache import PlanCache, parse_intent
-from wrs_agent.schemas import ActionContext, CapabilitySnapshot, NodeSnapshot, Plan, RobotData, Step
+from wrs_agent.schemas import (
+    ActionContext,
+    CapabilitySnapshot,
+    NodeSnapshot,
+    ObjectData,
+    Plan,
+    RobotData,
+    SceneData,
+    Step,
+)
 from wrs_agent.skills import SKILLS
 
 BINDINGS = {name: "wrs" for name in ("observe", "pick", "place", "verify")}
+
+
+def objects(**locations):
+    return {name: ObjectData(location=value, source="mock") for name, value in locations.items()}
 
 
 def context():
@@ -21,7 +34,8 @@ def context():
             admission="OPEN",
             active_action=None,
             stop_confirmed=True,
-            data=RobotData(objects={"A": "table", "D": "table"}, facts={"calibration": "v1"}),
+            data=SceneData(robot=RobotData(), objects=objects(A="table", D="table"),
+                           facts={"calibration": "v1"}),
         )
     }
     caps = {"wrs": CapabilitySnapshot(skills=dict.fromkeys(BINDINGS, 1))}
@@ -65,7 +79,7 @@ def test_strict_hit_unrelated_change_new_authority_and_no_cached_grants():
             "boot_id": "new-boot",
             "control_epoch": 8,
             "state_version": 10,
-            "data": worlds["wrs"].data.model_copy(update={"objects": {"A": "table", "D": "C"}}),
+            "data": worlds["wrs"].data.model_copy(update={"objects": objects(A="table", D="C")}),
         }
     )
     hit = cache.lookup("put A in B", {"wrs": changed}, caps, BINDINGS)
@@ -88,7 +102,7 @@ def test_applicability_change_rejects(change, monkeypatch):
     world = worlds["wrs"]
     if change == "location":
         worlds["wrs"] = world.model_copy(
-            update={"data": world.data.model_copy(update={"objects": {"A": "C"}})}
+            update={"data": world.data.model_copy(update={"objects": objects(A="C")})}
         )
     elif change == "calibration":
         worlds["wrs"] = world.model_copy(
@@ -98,7 +112,7 @@ def test_applicability_change_rejects(change, monkeypatch):
         caps["wrs"] = CapabilitySnapshot(skills={"observe": 1})
     elif change == "held":
         worlds["wrs"] = world.model_copy(
-            update={"data": world.data.model_copy(update={"held_object": "A"})}
+            update={"data": world.data.model_copy(update={"robot": RobotData(held_object="A")})}
         )
     elif change == "unknown":
         worlds["wrs"] = world.model_copy(update={"admission": "UNKNOWN"})

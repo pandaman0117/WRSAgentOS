@@ -1,13 +1,13 @@
-"""Mock 抓取 A，再放到 B；after 明确指定先后关系。"""
+"""WRS 机械臂先到 B，再向上移动 2 cm；after 指定先后关系。"""
 
 from wrs_agent import launch, step
 
 if __name__ == "__main__":
-    with launch() as system:
-        pick = step("pick", object="A")
-        place = step("place", object="A", target="B", after=pick)
-        verify = step("verify", object="A", target="B", after=place)
+    with launch(backend="wrs") as system:
+        ready = step("move_named_pose", pose="B")
+        upward = step("move_relative", dz=0.02, after=ready)
+        observe = step("observe", after=upward)
 
-        task = system.start(pick, place, verify)
+        task = system.start(ready, upward, observe)
         print("任务结果：", task.wait().state)
-        print("A 的位置：", system.snapshot().data.objects["A"])
+        print("TCP 位置：", system.snapshot().data.robot.kinematics.tcp_pos)

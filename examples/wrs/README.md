@@ -1,0 +1,39 @@
+# WRS：运动、停止与显示
+
+这里仅放 WRS 本身的例子，全部连接固定 WRS 后端，在 Lite6 模型中执行 IK/FK；不控制实机。
+
+| 文件 | 内容 |
+|---|---|
+| [01_move.py](01_move.py) | 移动到 B，读取关节与 TCP |
+| [02_cancel.py](02_cancel.py) | 运动中取消，等待停止确认 |
+| [03_new_action_after_cancel.py](03_new_action_after_cancel.py) | 停止后显式允许新动作，旧计划不续跑 |
+| [04_move_relative.py](04_move_relative.py) | 世界坐标系上下左右移动 2 cm |
+| [05_start_node.py](05_start_node.py) | 启动独立 WRS 和任务服务，等待其他进程连接 |
+| [06_control_arm.py](06_control_arm.py) | 控制已启动的 WRS 节点 |
+| [07_viewer.py](07_viewer.py) | 查询场景快照，显示机器人与物体 |
+| [08_scene.py](08_scene.py) | 独立加载场景，读取机器人和物体数据 |
+
+01–04 和 08 分别独立运行。05–07 使用同一服务：
+
+```powershell
+# 终端一
+./scripts/run.ps1 examples/wrs/05_start_node.py
+# 终端二
+./scripts/run.ps1 examples/wrs/07_viewer.py
+# 终端三
+./scripts/run.ps1 examples/wrs/06_control_arm.py
+```
+
+浏览器打开 http://127.0.0.1:8000。viewer 关闭只结束显示。节点重启后重新连接 viewer。
+
+05 加载本目录 [scene.toml](scene.toml) 中的工作台与方块；修改后重启 05 和 viewer。08 使用同一份配置，独立执行后自动退出：
+
+~~~powershell
+./scripts/run.ps1 examples/wrs/08_scene.py
+~~~
+
+snapshot().data 是 SceneData：robot.kinematics 为关节/TCP，objects[id] 包含 pos、rotmat、geometry、来源和有效性；位置单位 m，frame_id 为 world。没有几何的对象不捏造位姿。外层仍保留动作准入、控制版本与 state_version；查询不会触发新的感知。
+
+这是静态仿真场景，尚未增加在线视觉更新或碰撞规划，WRS pick/place 仍不支持。完整字段和后续并行节点设计见 [场景说明](../../docs/SCENE_AND_PERCEPTION.md)。
+
+原 08/09 语音例子已移到 [voice/05](../voice/05_start_wrs_voice.py) 和 [voice/06](../voice/06_push_to_talk.py)。语音操作也可以使用这里的 07 显示，但 WRS/05 与 Voice/05 不要同时启动。在线 GLM 的常驻语音是另一组独立地址，见 [Voice 示例](../voice/README.md)。

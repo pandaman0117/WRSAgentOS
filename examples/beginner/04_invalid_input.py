@@ -3,7 +3,7 @@
 from wrs_agent import AgentError, launch
 
 if __name__ == "__main__":
-    with launch() as system:
+    with launch(backend="wrs") as system:
         try:
             system.action("move_named_pose", pose="不存在的位置")
         except AgentError as error:

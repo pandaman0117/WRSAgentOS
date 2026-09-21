@@ -159,7 +159,7 @@ async def test_snapshot_flood_does_not_issue_or_evict_execution_permission(make_
         request = action(env)
         grants = dict(env.leases)
         for _ in range(100):
-            assert env.snapshot().data.held_object is None
+            assert env.snapshot().data.robot.held_object is None
         assert env.leases == grants
         assert (await env.submit(request)).accepted
         result = await eventually(

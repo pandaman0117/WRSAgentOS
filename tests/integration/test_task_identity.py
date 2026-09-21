@@ -41,7 +41,7 @@ async def test_scoped_cancel_rejects_late_controls_and_revision_does_not_execute
         assert (await b.wait()).state == "SUCCEEDED"
         assert b.id != a.id and (await a.status()).state == "CANCELLED"
         assert (await robot.status(old_action)).state == "CANCELLED"
-        assert (await system.snapshot()).data.pose == "C"
+        assert (await system.snapshot()).data.robot.pose == "C"
         assert (await robot.transport.request("request/health", {}))["executions"] == 2
 
 
@@ -57,7 +57,7 @@ async def test_late_planner_reply_cannot_replace_new_task():
         assert final.task_id == new.id and final.state == "SUCCEEDED"
         overview = await system.status()
         assert overview["planning"] == "IDLE" and overview["revision"] == 0
-        assert (await system.snapshot()).data.pose == "C"
+        assert (await system.snapshot()).data.robot.pose == "C"
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"
         ] == 1
@@ -71,14 +71,14 @@ async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
         pick = step("pick", object="A")
         old = await system.start(pick, step("place", object="A", target="B", after=pick))
         before = await eventually(
-            robot.context, lambda s: s.data.held_object == "A" and s.active_action is not None
+            robot.context, lambda s: s.data.robot.held_object == "A" and s.active_action is not None
         )
         planning = await system.goal("put A in B")
         await eventually(system.status, lambda s: s["planning"] == "WAITING")
         assert (await old.cancel()).accepted
         assert (await old.wait()).state == "CANCELLED"
         stopped = await robot.snapshot()
-        assert stopped.stop_confirmed and stopped.data.held_object == "A"
+        assert stopped.stop_confirmed and stopped.data.robot.held_object == "A"
 
         late = ActionRequest(
             action_id=new_id(),
@@ -101,5 +101,5 @@ async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
         assert (await new.wait()).state == "SUCCEEDED"
         assert new.id != old.id and (await old.status()).state == "CANCELLED"
         final = await robot.snapshot()
-        assert final.data.objects["A"] == "C" and final.data.held_object is None
+        assert final.data.objects["A"].location == "C" and final.data.robot.held_object is None
         assert (await robot.transport.request("request/health", {}))["executions"] == 4

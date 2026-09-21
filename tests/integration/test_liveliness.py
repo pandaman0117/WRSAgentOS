@@ -117,4 +117,4 @@ async def test_held_presence_is_not_permission_and_offline_tts_is_not_queried(mo
             assert (await moved.wait()).state == "SUCCEEDED"
             task = await system.start(step("move_named_pose", pose="C"))
             assert (await task.wait()).state == "SUCCEEDED"
-            assert (await system.snapshot()).data.pose == "C"
+            assert (await system.snapshot()).data.robot.pose == "C"

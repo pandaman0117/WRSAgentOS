@@ -56,8 +56,8 @@ async def test_one_recovery_only_with_fresh_ids(fault, state, recoveries, execut
             "executions"
         ] == executions
         world = await stack.system.clients["wrs"].snapshot()
-        assert world.data.held_object is None
-        assert world.data.objects["A"] == ("B" if state == "SUCCEEDED" else "table")
+        assert world.data.robot.held_object is None
+        assert world.data.objects["A"].location == ("B" if state == "SUCCEEDED" else "table")
 
 
 async def test_stop_during_reobserve_prevents_retry():

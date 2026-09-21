@@ -9,11 +9,11 @@ BINDINGS = Path(__file__).resolve().parents[2] / "configs/robot.toml"
 
 
 async def main():
-    async with LocalStack(bindings=BINDINGS) as stack:
+    async with LocalStack(backend="wrs", bindings=BINDINGS) as stack:
         robot = stack.system.clients["wrs"]
         state = await robot.snapshot()
         print("节点：", state.node_id)
-        print("当前位置：", state.data.pose)
+        print("当前位置：", state.data.robot.pose)
 
 
 if __name__ == "__main__":

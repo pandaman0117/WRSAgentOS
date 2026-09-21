@@ -155,11 +155,18 @@ class Session:
         return self._call(self._system.replay, kind)
 
 
-def launch(*, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None):
+def launch(
+    *, backend="mock", duration=0.4, bindings=None, scene=None, port=0, site="local", env_id=None,
+    tts_backend="mock", tts_python=None, tts_prepared_texts=(),
+):
     """Start configured local nodes; close owned nodes and router on exit."""
     return _session(
         System.launch(
             backend=backend,
+            scene=scene,
+            tts_backend=tts_backend,
+            tts_python=tts_python,
+            tts_prepared_texts=tts_prepared_texts,
             duration=duration,
             bindings=bindings,
             port=port,

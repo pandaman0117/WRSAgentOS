@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from wrs_agent.processes import router_path
+
 ROOT = Path(__file__).resolve().parents[1]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -47,7 +49,7 @@ def main():
         "wrs_commit": command(["git", "-C", "third_party/wrs", "rev-parse", "HEAD"]),
         "wrs_gitlink": command(["git", "ls-files", "--stage", "third_party/wrs"]),
         "wrs_worktree": command(["git", "-C", "third_party/wrs", "status", "--short"]),
-        "router": command([str(ROOT / ".local/zenoh-1.9.0/zenohd.exe"), "--version"]),
+        "router": command([str(router_path()), "--version"]),
         "wrs_probe": {
             "status": "UNVERIFIED",
             "reason": "Use --probe-wrs for virtual import/FK only",

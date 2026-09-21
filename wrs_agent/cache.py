@@ -6,7 +6,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from hashlib import sha256
 
-from wrs_agent.schemas import Plan
+from wrs_agent.schemas import Plan, SceneData
 from wrs_agent.skills import SKILLS
 
 TRANSFER = ("observe", "pick", "place", "verify")
@@ -47,16 +47,19 @@ def applicability(intent, worlds, capabilities, bindings):
         return None, "skill_version_mismatch"
     if world.admission != "OPEN" or not world.stop_confirmed or world.active_action:
         return None, "state_not_ready"
-    if world.data.held_object is not None:
+    if not isinstance(world.data, SceneData):
+        return None, "scene_missing"
+    if world.data.robot.held_object is not None:
         return None, "gripper_not_empty"
-    if intent.object not in world.data.objects or world.data.objects[intent.object] == "gripper":
+    obj = world.data.objects.get(intent.object)
+    if obj is None or not obj.valid or obj.location in {None, "gripper"}:
         return None, "object_not_observed"
     calibration = world.data.facts.get("calibration")
     if not isinstance(calibration, str) or not calibration:
         return None, "calibration_missing"
     specs = {name: SKILLS[name].spec.model_dump() for name in TRANSFER}
     return {
-        "location": world.data.objects[intent.object],
+        "location": obj.location,
         "calibration": calibration,
         "skills": sha256(json.dumps(specs, sort_keys=True).encode()).hexdigest(),
         "node": node_name,

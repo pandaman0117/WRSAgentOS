@@ -444,3 +444,219 @@ git diff --check
 证据：本地 reports/state_enums_summary.json、acceptance.json、unit.xml、zenoh.xml、wrs.xml、example_*.txt 与 doctor.json。环境仍为 Python 3.12.0、Pydantic 2.13.5、Zenoh/router 1.9.0、pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；依赖、锁文件、WRS gitlink 未变。真实硬件/GLM/ASR/音频没有调用，既有未验证范围未改变。
 
 本次无剩余实现阻塞；用法见 [状态枚举](task_handles.md#state-的字符串枚举) 和两个更新的取消示例。WRS backend 接口的待澄清项不影响本改动，也未因此连接其他 backend。沿用用户选择，只本地提交，不上传。
+
+
+## 2026-09-21：进程启动可移植性
+
+最终定向回归 56 passed / 0 failed / 0 skipped，覆盖另建含空格/中文路径虚拟环境、普通 site-packages 子进程、文件锁跨进程互斥/释放、自定义 Router、版本/凭据检查、独立节点示例及 TTS 取消复测。本轮 Python 文件 Ruff、git diff --check、PowerShell PATH 解释器入口通过；bootstrap 仅语法解析，未重装依赖。
+
+全量 verify.py --wrs 实际 exit 1：332 unit passed、Zenoh 67 passed / 1 failed、WRS 虚拟 5 passed。TTS 取消等待超时在后续定向组中通过，初始失败原因未确定，保留原证据。运行期间另一任务修改 WRS 技能、示例和验收目录；旧进程持有原目录，遇到序列输出改变、缓存/离线模型示例删除，以及新模型示例的一条 Ruff 行宽错误。因此不宣称本轮完整验收通过。
+
+原节点端口 7448 已占用，没有终止该服务；测试复制脚本到临时目录，仅替换端口/env_id 后独立运行，保留相同合同与处理函数。其他 WRS/示例改动保留；本轮 WRS 文件只调整科学依赖路径。
+
+证据及完整命令：reports/portable_processes_summary.json、portable_final_tests.xml/txt、portable_full_acceptance.json、portable_verify.txt、portable_doctor.json。Windows/Python 3.12.0；Zenoh/router 1.9.0，Pydantic 2.13.5，pytest 9.1.1，pytest-asyncio 1.4.0，Ruff 0.16.8。Linux/macOS、独立 wheel、真实模型/音频/硬件未验证。未提交或推送。下一入口：并行改动完成后重跑完整验收，再在 Linux/macOS 验证原生文件锁和启动/退出。
+
+
+## 2026-09-21：在线模型示例与实际 WRS 节点验收
+
+models 收敛为 01_plan.py（在线提出计划）和 02_execute.py（在线规划后 WRS 执行），移除代码关闭开关与离线执行入口。固定 GLM 协议样本移至 models/fixtures，所有测试引用已迁移；旧 developer 缓存空目录删除。凭据只从环境读取，没有写入代码；GLM_API_KEY 与 GLM_MODEL 当前未配置，在线账号调用记为 UNVERIFIED。
+
+所有机器人教学脚本显式使用 wrs_virtual；原 Mock 抓放示例改为命名姿态、相对位移、观察，Mock 缓存演示删除，缓存回归测试保留。方向移动由固定 WRS Lite6 实际 IK/FK 完成；世界坐标系每次非零总位移最多 5 cm，保持目标朝向、限制关节与近邻解，末端结果实测验证。控制循环不等待运动锁；停止期间迟到的 IK 不会执行；不可达明确 FAILED 并保留原状态。
+
+新增独立 WRS 服务、方向控制客户端与只读 viewer；viewer 使用 WRS 原生页面，不另建前端框架。页面/场景推送在回环，停止观察不取消任务。节点按原规则带历史日志重启后 HELD，控制客户端先查询停止确认，再显式 allow_actions 允许新任务；UNKNOWN 不自动解除。集成测试使用临时端口、命名空间和示例副本，保留用户正在运行的服务与日志。
+
+最终分组证据：**419 passed = 344 unit + 68 Zenoh + 7 WRS**，0 failures/errors/skipped；**21 份有限机器人示例**逐份通过，Ruff、doctor、git diff --check 与更新文档的本地链接检查通过。独立 WRS 节点/客户端/viewer、重启与退出清理包含在 7 项 WRS 中。额外捕获真实 scene_init 和 14 条 scene_update，任务 SUCCEEDED，关闭 viewer 后仍可查询节点。没有实际检查浏览器 GPU 画面，此项仍 UNVERIFIED。
+
+原全量 `scripts/verify.py --wrs` exit 1，真实历史报告保留：unit 的 15 个失败来自一处以多个路径片段构造的旧 fixture 路径；WRS 的 1 个失败来自示例固定日志重启后仍处于 HELD。修复后分别运行 `-m pytest -q tests/unit --junitxml=reports/wrs_examples_unit.xml`（344 passed）及 `-m pytest -q tests/integration/test_wrs.py tests/integration/test_wrs_examples.py --junitxml=reports/wrs_examples_final.xml`（7 passed）。68 Zenoh、全部 21 示例和静态检查在全量中通过，未把原失败结果改写成成功；上面的最终数量由最终各组证据汇总。
+
+所有 Python 命令使用 `D:\code\venv312\.venv\Scripts\python.exe -X utf8 -S scripts/run.py`。证据及完整命令见 reports/online_wrs_summary.json、wrs_examples_unit.xml、zenoh.xml、wrs_examples_final.xml、wrs_scene_evidence.json 与 example_*.txt。环境：Python 3.12.0、Zenoh/router 1.9.0、Pydantic 2.13.5、pytest 9.1.1、Ruff 0.16.8；WRS 科学依赖 numpy 1.26.4、scipy 1.16.2、mujoco 3.5.0、wgpu 0.32.0、websockets 15.0.1。固定 WRS gitlink 与依赖锁未变，未安装新依赖或连接硬件。实际抓放、碰撞规划、ASR/音频、跨机与性能仍未验收。
+
+工作区另一路可移植性修改已保留，本轮未提交或上传。下一入口：配置真实 GLM 账号后先运行仅规划示例，再运行执行示例；浏览器打开 WRS viewer 检查 WebGPU 画面。
+
+## 2026-09-21：GLM 环境配置错误提示
+
+- [x] 复现只有 Key/地址、GLM_MODEL 为空时的 Pydantic string_too_short；原输出保留 reports/glm_model_config_before.txt。
+- [x] GLMConfig.from_env 将缺失/空白模型、非法模型名/地址转成明确的 GLMError；GLM_API_KEY、GLM_BASE_URL 不代替模型选择，不猜测账号可用模型。
+- [x] 01_plan/02_execute 在创建 HTTP 客户端或启动节点前，用对应环境变量的提示退出；不回显输入值。配置模板与示例文档补充 IDE 加载 .env 和 GLM_MODEL 的要求。
+- [x] 指定解释器完整单元测试 **356 passed，0 failed/errors/skipped**；Ruff、git diff --check 通过。两个真实示例子进程在缺失模型的夹具环境下按预期 exit 1，仅打印清楚的配置提示，无 traceback。
+
+命令前缀为 D:\code\venv312\.venv\Scripts\python.exe -X utf8 -S scripts/run.py；
+单元命令尾部为 -m pytest -q tests/unit --junitxml=reports/glm_model_config_unit.xml；
+Ruff 为 -m ruff check wrs_agent tests examples scripts。
+全部命令、cwd、依赖版本和证据见 reports/glm_model_config_summary.json。
+本轮没有读取或修改用户 .env/凭据，没有发送付费请求或运行 WRS/硬件；在线成功仍未验证。
+下一入口：用户在 01_plan/02_execute 对应运行环境配置 GLM_MODEL 为账号实际可用的模型 ID，再运行在线示例。
+
+
+## 2026-09-21：WRS 后端名称与可读 viewer 示例
+
+用户确认保留真实 WRS 接入，将 wrs_virtual 统一为 wrs。CLI、LocalStack、serve_node、能力声明、当前示例和测试同步迁移；旧值在三处明确拒绝，不保留别名。仿真与实机区别仍通过 hardware=false、FK 验证与停止范围说明，不把真实 WRS 模型等同真实设备。
+
+07_viewer.py 显式创建 World/Lite6/坐标轴，读取节点初始状态，在定时回调中检查启动实例和有效状态后更新 FK，最后关闭显示。show_wrs/create_viewer 包装已删除；viewer_hub 仅管理页面服务生命周期。并行任务新增的示例口令读取逻辑保留。
+
+最终相关回归 85 passed（78 unit + 7 WRS），0 failures/errors/skipped；另在并行凭据改动到达后复测 viewer/独立节点/客户端组 1 passed，不重复计入总数。5 份代表性有限示例通过：beginner/01_action、tasks/01_sequence、voice/01_stop_task、transport/03_submit、wrs/04_move_relative。相关文件 Ruff、git diff --check 和修改文档链接检查通过。未重跑完整仓库测试；全仓库 Ruff 期间观察到另一组正在编辑的示例口令文件格式问题，未覆盖其工作。
+
+首轮单元组 76 passed / 2 failed：并行 GLM 默认模型变更与缺失模型测试冲突；另一任务恢复显式模型配置后同一组重跑 78 passed，本轮未更改 GLM 行为。证据：reports/wrs_backend_rename_summary.json、wrs_backend_unit.xml（首次）、wrs_backend_unit_final.xml、wrs_backend_integration.xml、viewer_explicit_final.xml、wrs_backend_examples.json。命令使用固定 Python 经 scripts/run.py 执行，完整参数见汇总。依赖和 WRS gitlink 未改变，无硬件/在线模型调用；浏览器 GPU 画面仍未人工检查。未提交、未上传。
+
+## 2026-09-21：本机示例自动共享口令验收
+
+三组分进程示例（connect/nodes/wrs）已接入 examples/_session.py：首次由服务随机生成，原子写入 Git 忽略的 .local/example_tokens；配套客户端从同一仓库加载，设置当前进程环境。显式 WRS_AGENT_TOKEN 优先且不写文件；空值使用自动配置，非法值/损坏文件报错；不显示或记录口令。客户端首次先启动时，提示准确服务入口和显式配置的处理方式。模板/示例文档补充手动生成命令、启动顺序、重置步骤与本机范围。
+
+**375 单元 + 9 集成 = 384 passed，0 failed/errors/skipped**（最终分组结果）。
+单元命令：指定解释器 -X utf8 -S scripts/run.py -m pytest -q tests/unit --junitxml=reports/example_tokens_unit.xml。
+集成组：tests/integration/test_example_token_connect.py、test_developer_examples.py、test_connect.py、test_wrs_examples.py，首轮 8 passed；自动口令测试随后扩展为 TTS/WRS 两个参数化场景，复测 2 passed，替换原 1 项自动口令场景后共 9 项，不重复计数。最终自动口令用例验证服务与客户端环境均没有 WRS_AGENT_TOKEN、实际动作成功、错误口令仍被拒绝、日志不含口令、客户端退出服务仍在运行。测试使用临时口令目录和独立端口/namespace，不修改用户 .env 或正在运行的服务。
+新增 helper 单元检查 16 项，包含四个真实并发子进程首次生成时共享同一完整口令；最终针对 helper/自动连接的复测为 17 passed，WRS 参数化后自动连接组另有 2 passed。
+
+Ruff 全仓库与 git diff --check 通过。测试开发中先修复 unit/integration 同名导致的收集冲突，再修正错误口令断言应匹配 AgentError（实际拒绝行为正常）；首次证据保留。命令、依赖版本、输出见 reports/example_tokens_summary.json、example_tokens_*.xml/txt。
+当前 Windows 上验证；POSIX 权限断言仅在相应平台执行，Linux/macOS 未验证。核心 connect/Transport 权限规则未改，自动配置只用于受信任本机示例；未运行完整网络回归、真实模型/音频/硬件或浏览器 GPU 验证。下一入口：先运行 examples/wrs/05_start_node.py，再运行 06_control_arm.py 或 07_viewer.py；已有非空手动口令时仍需各进程一致。
+
+## 2026-09-21：GLM 网络诊断与显式代理配置
+
+新增脱敏 DNS/TLS/证书/代理/连接/协议错误码；通过异常类型和有限 cause/context 链分类，不记录异常原文、Key、响应体或代理凭据。01_plan 在请求失败时打印明确说明并正常清理节点/HTTP 客户端。原 Runtime 的结构化错误会保留新代码和静态说明。
+新增可选 GLM_TRUST_ENV（默认 0）：1/true 使用 HTTPX 的系统/环境代理与 CA 配置；默认直连不读取代理或 CA 环境。核实 HTTPX 0.28.1 中显式 transport 会关闭环境代理发现，因此 opt-in 使用标准 transport；离线 MockTransport 始终禁用环境代理。未修改用户 .env、系统代理/DNS，也未关闭证书验证或切换模型端点。
+scripts/check_glm_connection.py 使用无 Authorization 的 GET，只检查网络，不读取 Key、不调用模型、不启动机器人。--trust-env 用于单独比较代理路径；401/404 等也可表明已收到 HTTP 响应。
+
+实测当前环境直连 cause=socket.gaierror、Windows 11001；系统代理 127.0.0.1:10808，首次探测为 SSLEOFError，后续诊断为 glm_timeout。两条路径均未收到 HTTP 响应，因此当前网络仍未连通，账号/模型调用未验证。没有修改或隐去这些失败结果。
+最终相关回归 **400 passed，0 failures/errors/skipped**：指定解释器 -X utf8 -S scripts/run.py -m pytest -q tests/unit tests/integration/test_glm_runtime.py --junitxml=reports/glm_network_regression.xml。覆盖错误链分类、敏感输入不回显、异常后清理、显式代理选择、离线夹具隔离、无认证诊断及既有 GLM/Zenoh 软件行为。Ruff 全仓库与 git diff --check 通过；首次行宽问题仅格式修正。
+证据：reports/glm_network_summary.json、glm_network_regression.xml/txt、glm_network_lint.txt、glm_network_probe.json、glm_dns_proxy_probe.json、glm_connection_direct.txt、glm_connection_system_proxy.txt。
+下一入口：先让 check_glm_connection.py（直连或 --trust-env）取得 HTTP 响应，再在模型进程设置对应 GLM_TRUST_ENV 并重跑 01_plan。未发送真实模型请求、付费调用或硬件动作；不把离线回归通过视为外部网络已修复。
+
+
+## 2026-09-22：Qwen 本地中文 ASR / TTS 与 WRS 语音例子
+
+新增 qwen-asr/qwen-tts 互斥 extras 和真实 uv.lock，两个环境由固定 Python 3.12.0 创建到 .local/venvs；uv pip check 均通过（ASR 97 包，TTS 91 包）。核心不安装语音依赖。模型固定官方提交、Apache-2.0 声明与全部文件内容哈希，已显式下载并校验；没有 API Key、录音上传、硬件控制或默认声卡调用。
+
+接入沿用 Voice 文本输入、Task 取消与 speak 动作合同。模型/设备调用在线程中，停止生成后丢弃迟到音频，播放 abort/close 无法确认时 UNKNOWN。固定中文指令精确匹配，有词汇提示但没有模糊运动授权；识别期间实例或 control_epoch 变化会拒绝旧输入。WRS 08 服务、09 ASR 客户端与 07 viewer 展示完整链条，播报与运动并行；固定播报启动前预合成。
+
+核心最终全量单元 **429 passed**（reports/qwen_core_unit_final.xml）；原有 Zenoh/WRS 集成 **77 passed**，新增生产语音适配 + 真 WRS/Voice/Zenoh 的取消集成 **1 passed**，后者声音设备使用替身，不算真实声卡验证。另执行 voice/01_stop_task、wrs/04_move_relative 两个有限真实 WRS 例子通过。末尾补充查询显示后再对语音相关组复测，见最终汇总。Ruff、uv lock --check、默认 core requirements 导出与示例目录检查通过。
+
+真实模型证据：Qwen TTS 加载 8.35 秒，两个样本生成 4.64 / 2.55 秒；生成中发出停止后 0.302 秒返回无音频结果。WRS/Voice/TTS 加载并预合成七句约 44.27 秒；同时 ASR 推理时整张 GPU nvidia-smi 采样峰值 5457 MiB（含桌面其他占用）。中文 ASR 加词汇提示后，两条合成样本“向上”“停止”均精确匹配，0.132 / 0.129 秒；不含收音与截句时间，不是统计性能承诺。初次无词汇提示的“向上”识别为“想上”，未把这一失败隐藏为成功，也没有将误识别映射为运动。
+
+真实收音、声卡播放/取消、回声、方言/噪声准确率、现场端到端停止延迟仍 **UNVERIFIED**。该限制不通过 mock 结果替代。具体安装/启动命令见 QWEN_SPEECH.md；原始证据 reports/qwen_*.txt/json/xml 与 .local/speech-check。默认脚本只观察/检查，不自动开麦或播放。保留原有用户及并行更改，未提交或上传。
+
+
+## 2026-09-22：WRS TCP 字段与并行感知设计
+
+完成状态命名与语义迁移：kinematics.joints → qs，tip_position → tcp_pos；新增 tcp_name 与 tcp_rotmat。固定 WRS 的 Lite6 注册 flange TCP，适配器现在读取该具名 TCP，IK 和到位检查使用同一对象；修复原实现依赖最后连杆与零工具偏移重合的假设。所有当前示例、viewer、测试和 doctor probe 同步迁移，RobotData.pose 仍为命名姿态标签。消息封装/Zenoh v4 路径未变，但运动学字段不向后兼容，服务与客户端需同步更新重启。
+
+真实命令（cwd 为仓库根目录）：
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit tests/integration/test_wrs.py tests/integration/test_wrs_examples.py tests/integration/test_wrs_tcp.py tests/integration/test_example_token_connect.py --junitxml=reports/wrs_tcp_regression.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/wrs/01_move.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/wrs/04_move_relative.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/tasks/01_sequence.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/doctor.py --probe-wrs --output reports/wrs_tcp_doctor.json
+git diff --check
+```
+
+结果：**433 passed = 423 unit + 10 integration，0 failures/errors/skipped，63.70 s**。新增真实 WRS 工具偏移与旋转测试：TCP 不等于末连杆，TCP 相对移动/朝向保持正确；改变工具偏移后原到位目标不能继续通过验证。既有 IK 迟到停止、取消、任务、独立节点/客户端/viewer、自动口令配对通过。3 份有限示例的预期输出通过，Ruff、doctor、git diff --check 与修改文档本地文件链接检查通过；没有失败被改写或跳过。
+
+环境：Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1、Ruff 0.16.8；WRS 固定提交 2bb014b747833c2fd9345115fbe26ffb11376f20 未修改。科学依赖版本由 reports/wrs_tcp_doctor.json 记录。证据：reports/wrs_tcp_regression.xml/txt、wrs_tcp_lint.txt、wrs_tcp_example_*.txt、wrs_tcp_doctor.json/txt、wrs_tcp_summary.json（实际示例命令和输出检查）。
+
+[状态与并行感知设计](SCENE_AND_PERCEPTION.md) 区分必要的坐标归属与暂不增加的 scene_revision，说明 Node 常驻/Skill 按需、相机独立发布与多个消费者并行订阅。DimOS 参考本地固定提交 29dfda595892dffb91c79f379eb44d1c737f9caf 的 CameraModule、Detection2DModule、backpressure 和 ObserveSkill，没有引入其依赖或复制实现。
+
+SceneData、真实相机、视觉/抓取候选节点仍为设计，未运行模型/麦克风/硬件或真实抓取；浏览器 GPU 画面未人工检查。未重跑全部非 WRS 网络集成。保留其他任务的 Qwen/语音与依赖修改，不提交、不上传。本轮已授权的命名修正及调查完成；下一入口是按设计文档交付有界相机数据流，再扩展具体场景与抓取技能。
+
+
+## 2026-09-22：启动播报、独立语音入口与示例整理
+
+WRS 01–07 保留机器人/显示；原语音文件移动到 Voice 05/06，01–04 明确文字入口；新增在线 GLM 服务 07、循环短句收音 08 和完整 viewer 09。新增 TTS 01 独立启动/预合成/启动播报、02 提交、03 取消。各目录 README 提供无需模式参数的运行顺序。同步 launch 补齐 tts_backend/tts_python/tts_prepared_texts；核心库不会自动发声。
+
+Voice 本来就是独立 Zenoh 节点；ASR 是独立输入进程，不新增另一套节点注册。普通目标要求“机器人”前缀，停止免唤醒；观察模型/任务的协程不阻塞收音。识别期间 boot_id/control_epoch 变化会拒绝迟到目标。仍为短句分段 ASR，有收音间隙，没有新聊天记忆/流式协议。
+
+真实命令（固定解释器，仓库根目录）：
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit --junitxml=reports/voice_examples_unit.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/integration/test_qwen_voice_wrs.py tests/integration/test_voice_text.py tests/integration/test_wrs_examples.py tests/integration/test_example_token_connect.py --junitxml=reports/voice_examples_integration.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_voice_examples.py tests/integration/test_qwen_voice_wrs.py::test_continuous_voice_stop_invalidates_pending_plan_without_waiting_for_model --junitxml=reports/voice_examples_final.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/integration/test_qwen_voice_wrs.py::test_continuous_voice_stop_invalidates_pending_plan_without_waiting_for_model --junitxml=reports/voice_examples_stop_final.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+```
+
+全量单元 462 passed；后续增量 32 unit passed，其中新增 1 项同步参数透传。集成首跑 11 passed/1 failed；新增测试断言先误用当前规划 ID，后未等模型实际进入。修正测试为等待 planner_calls==1，最终复测 1 passed，未改变控制实现。12 个相关集成已分别通过；不隐藏早期失败报告，不把增量重复计入总数。
+
+8 份有限例子通过：Voice 01–04 与 WRS 01–04，真实命令、输出和预期核对见 reports/voice_examples_scripts.json。Ruff、本地文档链接、示例目录和 git diff --check 通过。测试不调用扬声器、麦克风或付费模型。
+
+**UNVERIFIED**：实际启动音播放、声卡停止、循环收音/回声/现场延迟、在线 GLM 语音全链。自动审批拒绝了真实播放探针，理由为此次音频设备副作用缺少明确授权，未执行该命令。软件测试使用音频替身不能代替现场验收；模型安装与既有合成/ASR 数据见 [Qwen 指南](QWEN_SPEECH.md)。完整结果与依赖版本见 reports/voice_examples_summary.json。本轮无新增依赖/协议、不提交或推送。
+
+
+## 2026-09-22：ASR 的 IDE 工作目录与解释器
+
+修复下载/加载默认目录随 cwd 改变的问题：二者共用项目源码根目录下的绝对 model_root，显式目录与 WRS_AGENT_MODELS 可覆盖，保留版本及文件校验。选错解释器时先提示已准备的 qwen-asr 环境，不先加载 Torch 再报模块缺失。更新 Voice/Qwen 指南；未自动重下权重或改公共 venv。
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_speech.py tests/unit/test_voice_examples.py --junitxml=reports/asr_path_unit.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent/speech scripts/download_speech_models.py tests/unit/test_speech.py
+# 下条实际工作目录为 examples/voice，仅加载模型和识别既有测试音频：
+& 'D:\code\ch\agentOS\.local\venvs\qwen-asr\Scripts\python.exe' -X utf8 'D:\code\ch\agentOS\reports\asr_path_probe.py'
+```
+
+验证结果：64 项相关单元测试通过（speech + voice examples），Ruff 与 git diff --check 通过；首次 Ruff 仅多余空行问题，已修正。实际从 examples/voice 工作目录，用项目内 ASR 解释器完成离线模型加载 11.92 秒、预热 1.10 秒；两条既有合成样本“向上”“停止”均正确识别，推理 0.168/0.147 秒。ASR 与 TTS 资源均定位到项目根目录下既有模型，未重新下载，未绕过校验。公共解释器实际触发新的明确依赖提示。没有开麦、播放、云端请求、节点连接或硬件动作。
+证据：reports/asr_path_before.json、asr_path_unit.xml/txt、asr_path_probe.py/json/txt、asr_path_base.json、asr_path_lint.txt。依赖 qwen-asr 0.0.6 / transformers 4.57.6 / torch 2.9.0+cu128，未安装/更新依赖。此修复完成；用户将 IDE 中 Voice/06、08 的解释器切换为 .local/venvs/qwen-asr/Scripts/python.exe 即可使用现有安装。持续收音/现场声音仍不属于本次验证。
+
+
+## 2026-09-22：按用户要求将 ASR 安装到 venv312
+
+用户明确要求使用已有 D:\code\venv312\.venv，覆盖此前不修改公共环境的默认选择。以 uv pip install 增量安装 qwen-asr==0.0.6、torchaudio==2.9.0+cu128、sounddevice==0.5.6。安装前记录全部可见包版本并作为约束（include-system-site-packages=true，应按 importlib.metadata.version 的实际可见优先级，不能用重复 distribution 的最后一项）；只放开 Transformers 必需的 huggingface-hub<1。最终新增 29 包，仅已有 huggingface-hub 1.3.2 -> 0.36.2；Torch 2.9.0+cu128、Torchvision 0.24.0+cu128、NumPy 1.26.4、SciPy 1.16.2、Pydantic/Zenoh 等原版本保留。没有 sync 清理环境、没有改 Python 基础环境或重新下载模型。TTS 继续使用既有独立环境，两个 SDK 的 Transformers 精确依赖仍不可合并。
+
+实际命令（仓库根目录）：
+```powershell
+$env:UV_CACHE_DIR = Join-Path (Get-Location) '.local/uv-cache'
+& '.local/tools/bin/uv.exe' pip install --python 'D:\code\venv312\.venv\Scripts\python.exe' --torch-backend cu128 -c reports/venv312_asr_constraints.txt 'qwen-asr==0.0.6' 'torchaudio==2.9.0+cu128' 'sounddevice==0.5.6'
+& '.local/tools/bin/uv.exe' pip check --python 'D:\code\venv312\.venv\Scripts\python.exe'
+# 模型验证的实际 cwd 为 examples/voice；探针像 IDE 一样加入项目源码根目录：
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 'D:\code\ch\agentOS\reports\venv312_asr_probe.py'
+```
+
+模型验证通过：使用公共解释器离线加载 19.80 秒、预热 1.86 秒；已有合成样本“向上”“停止”正确识别，推理 0.151/0.160 秒。只识别本地样本，不开启音频设备、联网模型或运动节点；不是麦克风延迟实测。独立 WRS Lite6 加载/FK 检查通过。uv pip check 安装前后均只有两项原有缺失（joycon-robotics/hid、scipy-stubs/optype），没有新增冲突，不宣称整个共享环境完全健康。git diff --check 通过。
+
+中间失败：离线 dry-run 因部分缓存缺失而无法解析，联网重试；首次快照重复包读取到系统 Torch 2.10，改为实际可见版本 2.9 后预检查通过；初次裸脚本模型探针没有 IDE 的源码路径，补充同等源码路径后成功；FK 探针首次漏传 tcp 名称，修正为 flange。均为探针/解析阶段问题，未以失败方案修改模型或底层接口。
+证据 reports/venv312_asr_before.json、venv312_asr_constraints.txt、venv312_asr_dry_run*.txt、venv312_asr_install.txt、venv312_asr_check.txt、venv312_asr_probe_final.txt/json、venv312_asr_packages.json。Voice/Qwen 运行文档同步更新，不再要求本机用户切换 ASR 解释器。下一入口：IDE 按原命令运行 Voice/06；终端从仓库根目录用同一 Python 加 -m examples.voice.06_push_to_talk。此安装请求完成，无代码提交或上传。
+
+## 2026-09-22：SceneData 快照、静态场景与 viewer
+
+机器人节点的 NodeSnapshot.data 统一返回 SceneData：robot 保存 RobotData，objects 是有界的 ObjectData 映射，frame_id=world，单位 m；保留外层 boot_id/control_epoch/state_version 与执行准入。无重复 scene_revision。Mock 符号位置移至 objects[id].location，缓存/恢复检查同步迁移；SpeechData 不变。旧数据字段无别名，服务与客户端需一起更新重启。
+
+WRS 接受显式 scene=本地 TOML，工作线程建立真实 Scene/SceneObject 并读回物体位姿；首个几何为 box。未知朝向/几何不补成已知，来源为 configuration 的静态物体不冒充传感器观测；物体上限 32，文件与快照受既有消息预算约束。同步/异步 launch、LocalStack、CLI 与直接 serve_node 透传配置。错误配置在启动前拒绝。05 加载 scene.toml 的工作台和方块，07 与 Voice/09 viewer 同步场景，新增 08_scene.py 可独立运行。未加入视觉节点/在线更新协议或碰撞规划；WRS pick/place 仍未实现。
+
+真实命令（固定解释器，仓库根目录，完整参数和示例工作目录另见 reports/scene_summary.json）：
+~~~powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit --junitxml=reports/scene_unit_initial.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_scene.py tests/unit/test_cache.py tests/unit/test_node_state.py tests/unit/test_speech.py::test_cancel_during_synthesis_does_not_play_late_audio tests/integration/test_wrs_scene.py tests/integration/test_wrs_examples.py tests/integration/test_example_token_connect.py --junitxml=reports/scene_focused.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit tests/integration --junitxml=reports/scene_regression.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_scene.py tests/integration/test_wrs_scene.py --junitxml=reports/scene_final.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/doctor.py --probe-wrs --output reports/scene_doctor.json
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/wrs/08_scene.py
+git diff --check
+~~~
+
+全量回归：**569 passed、1 failed、0 errors/skipped，316.90 s**（488/489 unit 通过，81/81 integration 通过）。唯一失败为现有 tests/unit/test_speech.py::test_cancel_during_synthesis_does_not_play_late_audio：停止已受理后，测试的假播放函数仍被工作线程调用。代码检查表明 asyncio stop 到线程 Event 的异步转发存在调度窗口；本轮未更改语音实现或掩盖失败，不声称该取消语义已通过。它在 focused 组复查通过，随后全量再次失败，按竞态记录，留给语音任务处理。
+
+最后对 WRS 读回校验与没有 WRS 节点的错误场景配置补测：**21 passed（20 unit + 1 真实 WRS integration）**，是全量中的增量复测，不重复计入通过总数。此前 focused 组为 48 passed / 2 errors：同一个过大输入参数的 pytest 名称被写入 Windows PYTEST_CURRENT_TEST，造成 setup/teardown 环境变量过长；已改为短 ids，保留原失败 XML，后续全量/最终场景测试均通过该项。初始单元 468 passed / 1 speech failed 也保留原始报告。
+
+5 个有限示例通过：beginner/01_action、transport/01_query、wrs/08_scene、wrs/04_move_relative、tasks/01_sequence。08 实际从 examples/wrs 工作目录启动，机器人与 table/A 坐标读回成功，无相对路径错误；命令、输出与预期核对保存在 reports/scene_examples.json 和 scene_example_*.txt。真实 WRS 测试覆盖 Scene 成员/旋转/位姿、未知几何不伪造、独立 viewer 的创建/更新/删除且不影响后端；独立 05/06/07 服务生命周期、动作/任务、缓存/恢复和 TCP 偏移回归通过。
+
+Ruff、doctor WRS probe、git diff --check、示例目录与 123 条本地文档文件链接检查通过。Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1、Ruff 0.16.8；WRS 固定提交 2bb014b747833c2fd9345115fbe26ffb11376f20 未修改，科学包版本见 reports/scene_doctor.json。无新增依赖。
+
+未验证：真实相机/视觉/GraspNet、在线物体更新、实机、碰撞规划、浏览器 GPU 人工画面、真实音频设备、付费 GLM；本轮未调用这些能力。保留其他任务的语音/依赖修改，不提交或推送。后续入口：按 SCENE_AND_PERCEPTION.md 的并行订阅方案，完成有界相机流与可信观测接入，而非把图像塞入 SceneData。
+
+
+## 2026-09-22：上传前完整验证与 TTS 取消竞态修复
+
+上传整理保留既有四个本地提交；当前工作区的 WRS/SceneData、Qwen、GLM、示例与文档一起作为完整版本检查。发现前述 SceneData 验收留下的 TTS 取消竞态，先通过刻意延迟 stop relay 的确定性测试复现（1 failed，保留 publish_race_before.xml），再修复：合成与播放之间回到控制事件循环检查停止信号，已取消合成的结果不会因线程 Event 尚未同步而开始播放；取消期间仍等待工作线程退出，不把取消协程当作停止确认。没有新增消息协议或节点控制接口。
+
+验证命令（仓库根目录；固定 Python 加 -X utf8 -S scripts/run.py）：
+~~~text
+-m pytest -q tests/unit --junitxml=reports/publish_unit.xml
+-m pytest -q tests/integration -m "not live_model and not audio_live and not hardware" --junitxml=reports/publish_integration.xml
+-m pytest -q tests/unit tests/integration/test_qwen_voice_wrs.py --junitxml=reports/publish_final_regression.xml
+-m ruff check wrs_agent tests examples scripts
+~~~
+
+初次全量单元 489 passed；全部集成 81 passed。修复取消竞态后重跑全部单元及相关 WRS/Voice/TTS 集成，492 passed = 490 unit + 2 integration，0 failed/errors/skipped；两项集成已包含在前述 81 项，不重复计数。全部 22 个有限教学示例通过，逐条真实命令与输出核对见 reports/publish_examples.json。没有自动运行麦克风、扬声器、在线 GLM 或实机例子。
+
+Ruff、uv lock --check --offline、当前本地文档链接、示例目录和暂存区 diff --check 通过；清理 viewer.py 末尾空白。扫描候选文件及既有未推送历史，未发现私钥/常见令牌模式；.env、本机口令、虚拟环境、模型权重、录音和 reports 保持忽略。第三方 WRS submodule 保持原提交且干净。模型缓存、ASR 环境安装与音频验证限制仍按各专题记录，不把软件回归替代真实设备验收。
+
+证据 reports/publish_unit.xml、publish_integration.xml、publish_final_regression.xml、publish_race_before.xml、publish_examples.json、publish_lint_final.txt、publish_lock.txt、publish_scan.json；不上传本机生成的 reports。

@@ -3,11 +3,11 @@
 from wrs_agent import launch
 
 if __name__ == "__main__":
-    with launch(backend="wrs_virtual") as system:
+    with launch(backend="wrs") as system:
         motion = system.action("move_named_pose", pose="B")
         result = motion.wait()
         state = system.snapshot()
 
         print("动作结果：", result.state)
-        print("关节角：", state.data.kinematics.joints)
-        print("末端位置：", state.data.kinematics.tip_position)
+        print("关节角：", state.data.robot.kinematics.qs)
+        print("TCP 位置：", state.data.robot.kinematics.tcp_pos)

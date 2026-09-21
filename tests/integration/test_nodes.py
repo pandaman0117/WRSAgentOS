@@ -58,14 +58,14 @@ async def test_parallel_nodes_dependency_and_resources():
             return await wrs.snapshot(), await tts.context()
 
         both = await eventually(concurrent, lambda pair: all(w.active_action for w in pair))
-        assert both[0].data.objects["A"] == "table"  # dependent pick has not run
+        assert both[0].data.objects["A"].location == "table"  # dependent pick has not run
         await eventually(
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] in {"SUCCEEDED", "FAILED", "UNKNOWN"},
         )
         result = await bus.request("request/task/status", {})
         assert result["state"] == "SUCCEEDED", result
-        assert (await wrs.snapshot()).data.objects["A"] == "B"
+        assert (await wrs.snapshot()).data.objects["A"].location == "B"
         assert (await tts.snapshot()).data.completed == 1
         assert (await bus.request("request/health", {}))["executions"] == 4
         assert result["planner_calls"] == 0  # progress does not invoke a model
@@ -285,7 +285,7 @@ async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_suc
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] == "CANCELLED",
         )
-        assert (await wrs.snapshot()).data.objects["A"] == "B"
+        assert (await wrs.snapshot()).data.objects["A"].location == "B"
         assert (await wrs.snapshot()).control_epoch == old_epoch
 
         # Only the cancelled resource remains held. A robot-only new task works.
@@ -306,7 +306,7 @@ async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_suc
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] == "SUCCEEDED" and s["steps"].get("pick_D") == "SUCCEEDED",
         )
-        assert (await wrs.snapshot()).data.held_object == "D"
+        assert (await wrs.snapshot()).data.robot.held_object == "D"
 
 
 async def test_snapshot_queries_preserve_pending_context_over_real_zenoh():
@@ -322,7 +322,7 @@ async def test_snapshot_queries_preserve_pending_context_over_real_zenoh():
             lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
         )
         assert done.verification == "PASS"
-        assert (await node.snapshot()).data.pose == "B"
+        assert (await node.snapshot()).data.robot.pose == "B"
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"
         ] == 1

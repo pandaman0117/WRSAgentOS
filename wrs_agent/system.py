@@ -89,7 +89,11 @@ class System:
         skill_bindings = dict(skill_bindings)
         token = os.environ.get("WRS_AGENT_TOKEN", "") if _token is None else _token
         if not 16 <= len(token) <= 128:
-            raise ValueError("Set WRS_AGENT_TOKEN to a session credential of 16 to 128 characters")
+            raise ValueError(
+                "Set WRS_AGENT_TOKEN in this terminal or IDE run configuration to the same "
+                "session credential used by the running nodes (16 to 128 characters). "
+                "See examples/README.md for connect/nodes setup; .env is not loaded automatically."
+            )
         async with AsyncExitStack() as cleanup:
             transports, by_suffix = {}, {}
             for name, definition in definitions.items():
@@ -108,12 +112,18 @@ class System:
     @classmethod
     @asynccontextmanager
     async def launch(
-        cls, *, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None
+        cls, *, backend="mock", duration=0.4, bindings=None, scene=None,
+        port=0, site="local", env_id=None,
+        tts_backend="mock", tts_python=None, tts_prepared_texts=(),
     ):
         from wrs_agent.processes import LocalStack
 
         async with LocalStack(
             backend=backend,
+            scene=scene,
+            tts_backend=tts_backend,
+            tts_python=tts_python,
+            tts_prepared_texts=tts_prepared_texts,
             duration=duration,
             bindings=bindings,
             port=port,

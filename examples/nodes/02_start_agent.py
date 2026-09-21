@@ -3,12 +3,14 @@
 import asyncio
 from pathlib import Path
 
+from examples._session import use_local_token
 from examples.nodes.greet_skill import register_greet
 from wrs_agent.nodes.serve import serve_node
 
 BINDINGS = Path(__file__).with_name("bindings.toml")
 
 if __name__ == "__main__":
+    use_local_token("nodes", create=True)
     register_greet()
     try:
         asyncio.run(

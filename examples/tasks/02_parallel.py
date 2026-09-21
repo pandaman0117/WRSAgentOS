@@ -1,9 +1,9 @@
-"""让 Mock 机器人运动与 Mock 播报同时进行。"""
+"""让 WRS 仿真机械臂运动与 Mock 播报同时进行。"""
 
 from wrs_agent import launch, step
 
 if __name__ == "__main__":
-    with launch(duration=1.0) as system:
+    with launch(backend="wrs", duration=1.0) as system:
         # 不同节点、没有 after 依赖，因此两步可以并行。
         motion = step("move_named_pose", pose="B")
         speech = step("speak", text="我正在移动。")

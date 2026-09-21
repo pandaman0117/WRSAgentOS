@@ -1,4 +1,4 @@
-"""Use the nominated interpreter with project-managed third-party packages."""
+"""Run development commands with the caller's Python and project-managed packages."""
 
 import runpy
 import sys

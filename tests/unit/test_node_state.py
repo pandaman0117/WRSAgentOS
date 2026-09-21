@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from wrs_agent.nodes.tts import make_mock_tts
-from wrs_agent.schemas import NodeSnapshot, RobotData, SpeechData
+from wrs_agent.schemas import NodeSnapshot, ObjectData, SceneData, SpeechData
 
 
 async def test_typed_snapshots_are_independent_observations(make_env, tmp_path):
@@ -11,12 +11,12 @@ async def test_typed_snapshots_are_independent_observations(make_env, tmp_path):
     try:
         first = robot.snapshot()
         second = robot.snapshot()
-        assert isinstance(first.data, RobotData)
+        assert isinstance(first.data, SceneData)
         assert first.node_id == "wrs" and first.boot_id == robot.boot_id
         assert first.captured_at_ns <= second.captured_at_ns
         assert first.state_version == second.state_version
-        first.data.objects["A"] = "caller-only"
-        assert robot.snapshot().data.objects["A"] == "table"
+        first.data.objects["A"] = ObjectData(source="mock", location="caller-only")
+        assert robot.snapshot().data.objects["A"].location == "table"
         for _ in range(100):
             speech = tts.snapshot()
             assert isinstance(speech.data, SpeechData)
@@ -34,7 +34,7 @@ async def test_typed_snapshots_are_independent_observations(make_env, tmp_path):
     "change",
     [
         {"data": {"kind": "speech", "pose": "B"}},
-        {"data": {"kind": "robot", "last_text": "wrong node"}},
+        {"data": {"kind": "scene", "last_text": "wrong node"}},
         {"data": {"kind": "unregistered"}},
         {"data": {"kind": "speech", "completed": "1"}},
         {"captured_at_ns": 0},

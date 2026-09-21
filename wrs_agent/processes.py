@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -18,16 +19,15 @@ from wrs_agent.schemas import new_id
 from wrs_agent.system import System
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path(r"D:\code\venv312\.venv\Scripts\python.exe")
 ROUTER_VERSION = "1.9.0"
-ROUTER = ROOT / f".local/zenoh-{ROUTER_VERSION}/zenohd.exe"
+ROUTER = ROOT / f".local/zenoh-{ROUTER_VERSION}" / (
+    "zenohd.exe" if os.name == "nt" else "zenohd"
+)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class InstanceLock:
     def __init__(self, name):
-        import msvcrt
-
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", name):
             raise ValueError("invalid_instance_name")
         path = Path(tempfile.gettempdir()) / "wrs-agent-locks" / f"{name}.lock"
@@ -38,7 +38,14 @@ class InstanceLock:
             self.file.flush()
         self.file.seek(0)
         try:
-            msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self.file.close()
             raise RuntimeError("node_already_running") from None
@@ -48,21 +55,43 @@ class InstanceLock:
 
 
 def python_command(*args):
-    if Path(sys.executable).resolve() != PYTHON.resolve():
-        raise RuntimeError(f"Required Python: {PYTHON}")
-    return [str(PYTHON), "-X", "utf8", "-S", str(ROOT / "scripts/run.py"), *map(str, args)]
+    """Use the caller's Python; preserve an explicitly isolated development launch."""
+    command = [sys.executable, "-X", "utf8"]
+    if sys.flags.no_site:
+        command.extend(["-S", str(ROOT / "scripts/run.py")])
+    return [*command, *map(str, args)]
 
 
-def check_router_version():
+def router_path():
+    """Resolve an explicit override, the local pinned binary, or zenohd on PATH."""
+    configured = os.environ.get("WRS_AGENT_ZENOHD")
+    if configured is not None:
+        path = Path(configured).expanduser().resolve()
+        if not configured or not path.is_file():
+            raise FileNotFoundError(f"WRS_AGENT_ZENOHD is not a file: {configured!r}")
+        return path
+    if ROUTER.is_file():
+        return ROUTER
+    found = shutil.which("zenohd")
+    if found:
+        return Path(found).resolve()
+    raise FileNotFoundError(
+        f"zenohd {ROUTER_VERSION} not found. Set WRS_AGENT_ZENOHD to its executable, "
+        f"install it at {ROUTER}, or add it to PATH."
+    )
+
+
+def check_router_version(router=None):
+    router = router_path() if router is None else Path(router)
     output = subprocess.check_output(
-        [str(ROUTER), "--version"], timeout=5, creationflags=NO_WINDOW
+        [str(router), "--version"], timeout=5, creationflags=NO_WINDOW
     ).decode("utf-8", errors="replace")
     # RUST_LOG=info/debug adds a timestamped log before the standalone version line.
     match = re.search(r"(?m)^zenohd v?(\S+)", output)
     if match is None or match.group(1) != ROUTER_VERSION:
         raise RuntimeError(
             f"zenohd_version_mismatch: expected {ROUTER_VERSION}; "
-            f"router={ROUTER}; output={output.strip()!r}"
+            f"router={router}; output={output.strip()!r}"
         )
 
 
@@ -80,13 +109,34 @@ class LocalStack:
         model_provider="mock",
         live_model=False,
         bindings=None,
+        scene=None,
+        tts_backend="mock",
+        tts_python=None,
+        tts_prepared_texts=(),
     ):
-        if backend not in {"mock", "wrs_virtual"}:
+        if backend not in {"mock", "wrs"}:
             raise ValueError("unsupported_backend")
         if model_provider not in {"mock", "glm"} or (model_provider == "glm" and not live_model):
             raise ValueError("invalid_model_provider_or_missing_live_opt_in")
+        if tts_backend not in {"mock", "qwen"}:
+            raise ValueError("unsupported_tts_backend")
+        self.tts_backend = tts_backend
+        self.tts_prepared_texts = tuple(tts_prepared_texts)
+        self.tts_python = Path(tts_python).resolve() if tts_python else None
+        if tts_backend == "qwen" and self.tts_python is None:
+            relative = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+            self.tts_python = ROOT / ".local/venvs/qwen-tts" / relative
+        if self.tts_python is not None and not self.tts_python.is_file():
+            raise FileNotFoundError("Run scripts/setup_speech.ps1 first: " + str(self.tts_python))
         self.model_provider, self.live_model = model_provider, live_model
         self.backend = backend
+        self.scene_path = Path(scene).resolve() if scene is not None else None
+        if self.scene_path is not None:
+            if backend != "wrs":
+                raise ValueError("scene_requires_wrs_backend")
+            from wrs_agent.scene import load_scene
+
+            load_scene(self.scene_path)  # Fail before spawning processes.
         self.duration, self.fault, self.deferred = duration, fault, deferred
         self.system = None
         self._connection = None
@@ -100,6 +150,8 @@ class LocalStack:
                 if role in self.roles:
                     raise ValueError("one_node_per_role_in_local_profile")
                 self.roles[role] = name
+        if self.scene_path is not None and "wrs" not in self.roles:
+            raise ValueError("scene_requires_wrs_node")
         if any(role not in {"wrs", "tts", "agent", "voice"} for role in self.roles):
             raise ValueError("node_type_not_implemented")
         if "voice" in self.roles and not {"wrs", "tts", "agent"}.issubset(self.roles):
@@ -153,8 +205,9 @@ class LocalStack:
         }
         config_path = self.directory / "router.json5"
         config_path.write_text(json.dumps(config), encoding="utf-8")
-        check_router_version()
-        process = self._spawn("router", [str(ROUTER), "-c", str(config_path)])
+        router = router_path()
+        check_router_version(router)
+        process = self._spawn("router", [str(router), "-c", str(config_path)])
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -187,16 +240,25 @@ class LocalStack:
             result.extend(["--bindings", str(self.bindings_path)])
         if role == "wrs":
             result.extend(["--backend", self.backend])
+            if self.scene_path is not None:
+                result.extend(["--scene", str(self.scene_path)])
         if role == "agent" and self.model_provider == "glm":
             result.extend(["--model-provider", "glm", "--live-model"])
         if self.deferred and role == "agent":
             result.append("--deferred-planner")
+        if role == "tts":
+            result.extend(["--tts-backend", self.tts_backend])
+            for text in self.tts_prepared_texts:
+                result.extend(["--tts-prepare", text])
+            if self.tts_python is not None:
+                # The optional speech node uses its own deps, without .local/deps or -S.
+                result = [str(self.tts_python), "-X", "utf8", *result[result.index("-m"):]]
         if self.fault:
             result.extend(["--fault", self.fault])
         return result
 
-    async def _wait_ready(self, bus, key):
-        async with asyncio.timeout(10):
+    async def _wait_ready(self, bus, key, *, seconds=10):
+        async with asyncio.timeout(seconds):
             while True:
                 if any(p.poll() is not None for p in self.processes):
                     raise RuntimeError(f"Node exited; see {self.directory}")
@@ -232,7 +294,10 @@ class LocalStack:
                     if role == "agent"
                     else "request/health"
                 )
-                await self._wait_ready(self.system._transports[node_id], key)
+                await self._wait_ready(
+                    self.system._transports[node_id], key,
+                    seconds=300 if role == "tts" and self.tts_backend == "qwen" else 10,
+                )
             return self
         except BaseException:
             await self.__aexit__(None, None, None)

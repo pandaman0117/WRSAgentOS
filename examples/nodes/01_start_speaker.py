@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 
+from examples._session import use_local_token
 from examples.nodes.greet_skill import GREET, register_greet
 from wrs_agent.actions import ActionExecutor
 from wrs_agent.nodes.serve import serve_node
@@ -29,6 +30,7 @@ def create_speaker(journal):
 
 
 if __name__ == "__main__":
+    use_local_token("nodes", create=True)
     register_greet()
     try:
         asyncio.run(

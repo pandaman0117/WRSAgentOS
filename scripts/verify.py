@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 
-from scripts.example_catalog import OFFLINE, WRS, check_catalog
+from scripts.example_catalog import WRS, check_catalog
 from wrs_agent.processes import NO_WINDOW, ROOT, python_command
 
 REPORTS = ROOT / "reports"
@@ -40,7 +40,7 @@ def main():
     if args.wrs:
         checks += [
             (
-                "wrs_virtual_runtime",
+                "wrs_runtime",
                 [
                     "-m",
                     "pytest",
@@ -53,9 +53,7 @@ def main():
             ),
         ]
     check_catalog(ROOT / "examples")
-    examples = dict(OFFLINE)
-    if args.wrs:
-        examples.update(WRS)
+    examples = WRS if args.wrs else {}
     expectations = {}
     for path, expected in examples.items():
         name = "example_" + path.removesuffix(".py").replace("/", "_")
@@ -93,10 +91,10 @@ def main():
         )
         print(f"{name}: {status}", flush=True)
     for test_id, reason in {
-        **({} if args.wrs else {"wrs_virtual_runtime": "Opt in with scripts/verify.py --wrs."}),
+        **({} if args.wrs else {"wrs_runtime": "Opt in with scripts/verify.py --wrs."}),
         "wrs_pick_place": "Unsupported in bare Lite6 profile; no validated grasp/contact scene.",
-        "glm_live": "GLM HTTP fixtures only; no account model/use authorization, no live call.",
-        "audio_live": "Text control and Mock/console TTS only; real ASR/audio untested.",
+        "glm_live": "Online examples excluded from automated checks; no live provider call.",
+        "audio_live": "Qwen model/audio runs require opt-in; excluded from default checks.",
         "vision_node": "No independent Vision process in this minimum increment.",
         "hardware": "Hardware backend cannot be selected.",
         "two_machine": "Loopback only; remote authentication/ACL profile is M7.",
