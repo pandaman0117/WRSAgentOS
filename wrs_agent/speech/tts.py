@@ -7,7 +7,6 @@ from wrs_agent.actions import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.skills import SKILLS, Skill, SpeakArgs, SpeechState
 from wrs_agent.speech.assets import model_directory, offline_cuda
 
-
 # Eight decode steps are two thirds of a second of audio, so a stop request lands within
 # roughly a third of a second of wall time. Smaller chunks only add codec decode overhead.
 STOP_CHECK_STEPS = 8
