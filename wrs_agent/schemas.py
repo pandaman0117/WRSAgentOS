@@ -271,7 +271,7 @@ class CapabilitySnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "vision"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "vision"]
     boot_id: Name | None = None
     capabilities: list[Name] = Field(default_factory=list, max_length=64)
     skills: dict[Name, SkillVersion] = Field(default_factory=dict, max_length=64)
@@ -404,3 +404,19 @@ class TextReceipt(Boundary):
     task_id: Name | None = None
     overview: dict | None = None
     error: ErrorInfo | None = None
+
+
+class AsrPress(Boundary):
+    """One push-to-talk session. The ID keeps begin/end idempotent across retries."""
+
+    press_id: Name = Field(default_factory=new_id)
+
+
+class AsrResult(Boundary):
+    """Capture outcome for the caller that held the button; transcripts are never broadcast."""
+
+    press_id: Name
+    capturing: bool = False  # Still recording or recognizing; text is final only when False.
+    text: str = Field(default="", max_length=1024)
+    reason: str = ""
+    receipt: TextReceipt | None = None

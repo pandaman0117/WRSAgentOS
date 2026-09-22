@@ -21,7 +21,8 @@ async def main():
         async with LocalStack(backend="wrs", bindings=CONFIG) as stack:
             snapshot = await stack.system.snapshot()
             skills = await stack.system.skills()
-            decision = await ModelPlanner(model).plan(
+            planner = ModelPlanner(model)
+            decision = await planner.plan(
                 PlanRequest(
                     user_goal=GOAL,
                     world=snapshot.data.model_dump(),
@@ -31,6 +32,20 @@ async def main():
             print("规划决定：", decision.kind)
             print("计划：", decision.plan)
             print("说明：", decision.text)
+            timing = planner.last_timing  # 观测用的单调耗时，不是超时或安全依据。
+            thinking = model.config.thinking or "账号默认"
+            print(f"模型：{model.config.model}，思考深度：{thinking}（GLM_THINKING）")
+            print(
+                f"耗时：等待首字节 {timing.model.wait:.3f} 秒，"
+                f"读取 {timing.model.receive:.3f} 秒，解析 {timing.model.parse:.3f} 秒，"
+                f"本地校验 {timing.validate:.3f} 秒，合计 {timing.total:.3f} 秒"
+            )
+            usage = planner.last_usage  # 服务商回报的用量，不是本地测得的数字。
+            reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            print(
+                f"用量：输入 {usage.get('prompt_tokens')} tokens，"
+                f"输出 {usage.get('completion_tokens')} tokens，其中推理 {reasoning} tokens"
+            )
     except GLMError as exc:
         raise SystemExit(f"GLM 请求失败（{exc.code}）：{exc.error.message}") from None
     finally:

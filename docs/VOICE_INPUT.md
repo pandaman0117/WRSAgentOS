@@ -103,3 +103,19 @@ UI 展示 disposition、accepted、phase、task_id 和 error.code。UNKNOWN 展�
 ## Qwen 中文输入适配
 
 已增加可选本地 `wrs_agent/speech/asr.py` 和完整 WRS 语音例子；麦克风及推理在输入客户端，Voice 仍消费已识别的文本。控制与固定方向命令的调用链、安装和局限见 [Qwen 语音指南](QWEN_SPEECH.md)。默认测试不会录音、下载模型或播放音频。
+
+## 按住说话的 ASR 节点
+
+收音也可以放进自己的进程：`asr` 节点持有麦克风和识别模型，客户端只发按键起止。Torch 与设备故障因此留在该进程内，Voice 保持轻量。节点声明能力 `input.transcribe`，不执行动作，不进入技能绑定。
+
+| 调用 | 作用 |
+|---|---|
+| `system.listen_begin(press_id=None)` | 按下。返回 `AsrResult`，同一 `press_id` 重复调用返回同一受理 |
+| `system.listen_end(press_id)` | 松开。只受理；识别在节点上继续 |
+| `system.listen_result(press_id)` | 取结果。`capturing=True` 表示仍在录音或识别 |
+
+一支麦克风一次只处理一次按住，并发的另一个 `press_id` 返回 `asr_busy`。松手信号丢失时录音自己到时结束（默认 15 秒），那段音频整段丢弃，不会迟到送出；随后新的按住可以正常开始。过短、溢出和设备失败同样整段丢弃，`reason` 给出固定原因码，不截断成另一句命令。
+
+识别文本只回给按住的那个调用者，不进广播。**目标不由节点提交**：调用者按自己的准入策略检查任务状态与 `admission` 后再 `send_text`，用 `press_id` 作 `input_id` 即可与节点侧幂等对齐。唯一例外是明确的停止和停止播报，节点直接送到 Voice 控制通道，因为停止不能依赖界面还活着来转发；此时 `AsrResult.receipt` 非空，调用者不必重发。Voice 无法确认时 `reason` 为 `voice_unconfirmed`，既不报成功也不丢文本。
+
+底层端点是 `request/asr/begin`、`request/asr/end`（控制通道）和 `request/asr/result`。装配见 `tests/fixtures/asr.toml`，例子见 `examples/voice/09_viewer.py`（按住空格说话）。验收入口：`tests/unit/test_asr_node.py`、`tests/integration/test_asr.py`；默认 `mock` 后端按脚本返回文本，不开麦克风。

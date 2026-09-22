@@ -113,6 +113,10 @@ class LocalStack:
         tts_backend="mock",
         tts_python=None,
         tts_prepared_texts=(),
+        asr_backend="mock",
+        asr_python=None,
+        asr_script=(),
+        asr_vocabulary=(),
     ):
         if backend not in {"mock", "wrs"}:
             raise ValueError("unsupported_backend")
@@ -120,14 +124,21 @@ class LocalStack:
             raise ValueError("invalid_model_provider_or_missing_live_opt_in")
         if tts_backend not in {"mock", "qwen"}:
             raise ValueError("unsupported_tts_backend")
-        self.tts_backend = tts_backend
+        if asr_backend not in {"mock", "qwen"}:
+            raise ValueError("unsupported_asr_backend")
+        self.tts_backend, self.asr_backend = tts_backend, asr_backend
         self.tts_prepared_texts = tuple(tts_prepared_texts)
+        self.asr_script, self.asr_vocabulary = tuple(asr_script), tuple(asr_vocabulary)
         self.tts_python = Path(tts_python).resolve() if tts_python else None
+        self.asr_python = Path(asr_python).resolve() if asr_python else None
+        relative = "Scripts/python.exe" if os.name == "nt" else "bin/python"
         if tts_backend == "qwen" and self.tts_python is None:
-            relative = "Scripts/python.exe" if os.name == "nt" else "bin/python"
             self.tts_python = ROOT / ".local/venvs/qwen-tts" / relative
-        if self.tts_python is not None and not self.tts_python.is_file():
-            raise FileNotFoundError("Run scripts/setup_speech.ps1 first: " + str(self.tts_python))
+        if asr_backend == "qwen" and self.asr_python is None:
+            self.asr_python = ROOT / ".local/venvs/qwen-asr" / relative
+        for interpreter in (self.tts_python, self.asr_python):
+            if interpreter is not None and not interpreter.is_file():
+                raise FileNotFoundError("Run scripts/setup_speech.ps1 first: " + str(interpreter))
         self.model_provider, self.live_model = model_provider, live_model
         self.backend = backend
         self.scene_path = Path(scene).resolve() if scene is not None else None
@@ -152,10 +163,12 @@ class LocalStack:
                 self.roles[role] = name
         if self.scene_path is not None and "wrs" not in self.roles:
             raise ValueError("scene_requires_wrs_node")
-        if any(role not in {"wrs", "tts", "agent", "voice"} for role in self.roles):
+        if any(role not in {"wrs", "tts", "agent", "voice", "asr"} for role in self.roles):
             raise ValueError("node_type_not_implemented")
         if "voice" in self.roles and not {"wrs", "tts", "agent"}.issubset(self.roles):
             raise ValueError("voice_requires_wrs_tts_agent")
+        if "asr" in self.roles and "voice" not in self.roles:
+            raise ValueError("asr_requires_voice")
         self.port, self.site = port, site
         self.env_id = env_id or backend + "-" + new_id()[:12]
         if not all(
@@ -250,9 +263,16 @@ class LocalStack:
             result.extend(["--tts-backend", self.tts_backend])
             for text in self.tts_prepared_texts:
                 result.extend(["--tts-prepare", text])
-            if self.tts_python is not None:
-                # The optional speech node uses its own deps, without .local/deps or -S.
-                result = [str(self.tts_python), "-X", "utf8", *result[result.index("-m"):]]
+        if role == "asr":
+            result.extend(["--asr-backend", self.asr_backend])
+            for text in self.asr_script:
+                result.extend(["--asr-script", text])
+            for word in self.asr_vocabulary:
+                result.extend(["--asr-vocabulary", word])
+        interpreter = {"tts": self.tts_python, "asr": self.asr_python}.get(role)
+        if interpreter is not None:
+            # The optional speech nodes use their own deps, without .local/deps or -S.
+            result = [str(interpreter), "-X", "utf8", *result[result.index("-m"):]]
         if self.fault:
             result.extend(["--fault", self.fault])
         return result
@@ -281,7 +301,7 @@ class LocalStack:
             self.system = await self._connection.__aenter__()
             self.system._local_stack = self
             # Only enabled TOML nodes start. Order keeps existing Voice dependencies explicit.
-            for role in ("wrs", "tts", "agent", "voice"):
+            for role in ("wrs", "tts", "agent", "voice", "asr"):
                 if role not in self.roles:
                     continue
                 node_id = self.roles[role]
@@ -294,9 +314,10 @@ class LocalStack:
                     if role == "agent"
                     else "request/health"
                 )
+                # Resident speech models load before readiness, not inside the first request.
+                loads_model = {"tts": self.tts_backend, "asr": self.asr_backend}.get(role) == "qwen"
                 await self._wait_ready(
-                    self.system._transports[node_id], key,
-                    seconds=300 if role == "tts" and self.tts_backend == "qwen" else 10,
+                    self.system._transports[node_id], key, seconds=300 if loads_model else 10
                 )
             return self
         except BaseException:

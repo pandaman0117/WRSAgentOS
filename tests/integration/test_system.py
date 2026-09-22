@@ -225,7 +225,7 @@ async def test_configuration_cannot_grant_an_unregistered_node_skill(tmp_path):
     async with System.launch(bindings=bindings, duration=0.02) as system:
         nodes = await system.nodes()
         assert nodes["tts"]["skills"] == {"speak": 1}
-        assert "pick" not in {skill.name for skill in await system.skills("pick")}
+        assert "pick" not in {skill.name for skill in await system.skills()}
         with pytest.raises(ValueError, match="skill_not_on_node"):
             await system.action("pick", object="A")
         health = await system.clients["tts"].transport.request("request/health", {})

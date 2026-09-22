@@ -74,11 +74,11 @@ def test_sync_keyboard_interrupt_cleans_owned_processes():
 
 def test_sync_skill_lookup_uses_current_nodes_without_executing_or_planning():
     with launch() as system:
-        skills = system.skills("播报当前状态")
-        assert [skill.name for skill in skills] == ["speak"]
-        assert "name: speech" in skills[0].instructions
-        skills[0].aliases.append("caller-only-change")
-        assert "caller-only-change" not in system.skills("播报")[0].aliases
+        skills = {skill.name: skill for skill in system.skills()}
+        assert "name: speech" in skills["speak"].instructions
+        skills["speak"].preconditions.append("caller-only-change")
+        fresh = {skill.name: skill for skill in system.skills()}
+        assert "caller-only-change" not in fresh["speak"].preconditions
         status = system.status()
         assert status["planner_calls"] == 0 and status["active_actions"] == {}
         assert {name: obj.location for name, obj in system.snapshot().data.objects.items()} == {

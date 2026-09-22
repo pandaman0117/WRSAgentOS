@@ -19,7 +19,12 @@ def normalize(text):
 
 
 def addressed_text(text):
-    """普通目标需称呼“机器人”；明确停止与状态查询不经过云端或唤醒判断。"""
+    """常开麦克风的循环收音用：普通目标需称呼“机器人”。
+
+    前缀在这里兼两个作用：区分“在对机器人下命令”和房间里的闲聊，以及挡住被麦克风
+    收回来的自己的播报（没有回声消除）。按住说话不需要它——按住按钮本身就界定了
+    这一句是对机器人说的。明确停止与状态查询两种都不经过唤醒判断。
+    """
     from wrs_agent.policy import text_intent
     from wrs_agent.schemas import TextInput
 

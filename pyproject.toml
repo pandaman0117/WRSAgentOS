@@ -11,7 +11,12 @@ dependencies = ["eclipse-zenoh==1.9.0", "pydantic>=2.12,<3"]
 
 [project.optional-dependencies]
 glm = ["httpx>=0.28,<0.29"]
-qwen-tts = ["qwen-tts==0.1.1", "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6"]
+# qwen-tts-hf 0.1.1.post1 (2026-08-25) predates Transformers 5.16; on 5.17 its rope
+# compatibility shim raises AttributeError on the Mimi codec config during weight init.
+qwen-tts = [
+    "faster-qwen3-tts==0.4.0", "transformers==5.15.1",
+    "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6",
+]
 qwen-asr = ["qwen-asr==0.0.6", "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6"]
 
 [dependency-groups]

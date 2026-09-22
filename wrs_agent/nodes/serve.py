@@ -8,6 +8,7 @@ from wrs_agent.bindings import load_bindings
 from wrs_agent.env.mock import make_mock_environment
 from wrs_agent.nodes.actions import ActionClient, register_actions
 from wrs_agent.nodes.agent import register_runtime
+from wrs_agent.nodes.asr import make_mock_capture, register_asr
 from wrs_agent.nodes.tts import make_mock_tts
 from wrs_agent.nodes.voice import register_voice
 from wrs_agent.planner import ModelPlanner
@@ -38,14 +39,19 @@ async def serve_node(
     action_factory=None,
     tts_backend="mock",
     tts_prepared_texts=(),
+    asr_backend="mock",
+    asr_script=(),
+    asr_vocabulary=(),
 ):
     """Serve until shutdown; a local action_factory receives only its journal path."""
-    if role not in {"wrs", "tts", "agent", "voice"}:
+    if role not in {"wrs", "tts", "agent", "voice", "asr"}:
         raise ValueError("unsupported_node_role")
     if action_factory is not None and role not in {"wrs", "tts"}:
         raise ValueError("action_factory_requires_action_node")
     if tts_backend not in {"mock", "qwen"}:
         raise ValueError("unsupported_tts_backend")
+    if asr_backend not in {"mock", "qwen"}:
+        raise ValueError("unsupported_asr_backend")
     if backend not in {"mock", "wrs"}:
         raise ValueError("unsupported_backend")
     if model_provider not in {"mock", "glm"} or (
@@ -68,7 +74,7 @@ async def serve_node(
     buses = []
     owner = None
     model = None
-    close_voice = None
+    close_node = None
     done = asyncio.Event()
     try:
 
@@ -145,15 +151,26 @@ async def serve_node(
                     d for d in definitions.values() if d["type"] == required_role and d["enabled"]
                 ]
                 if len(matches) != 1:
-                    raise ValueError("voice_requires_one_node_per_role")
+                    raise ValueError(f"{role}_requires_one_node_per_role")
                 return connect(env_id + matches[0]["suffix"])
 
-            close_voice = register_voice(
-                transport,
-                ActionClient(role_bus("wrs")),
-                ActionClient(role_bus("tts")),
-                role_bus("agent"),
-            )
+            if role == "voice":
+                close_node = register_voice(
+                    transport,
+                    ActionClient(role_bus("wrs")),
+                    ActionClient(role_bus("tts")),
+                    role_bus("agent"),
+                )
+            elif asr_backend == "qwen":
+                from wrs_agent.speech.asr import make_qwen_capture
+
+                # Model loading happens before readiness, never inside a press.
+                capture = await asyncio.to_thread(make_qwen_capture, vocabulary=asr_vocabulary)
+                close_node = register_asr(transport, role_bus("voice"), capture, backend="qwen")
+            else:
+                close_node = register_asr(
+                    transport, role_bus("voice"), make_mock_capture(asr_script)
+                )
 
         info = register_node(
             transport,
@@ -175,8 +192,8 @@ async def serve_node(
         await done.wait()
     finally:
         try:
-            if close_voice:
-                await close_voice()
+            if close_node:
+                await close_node()
             if owner:
                 await owner.close()
             if model:

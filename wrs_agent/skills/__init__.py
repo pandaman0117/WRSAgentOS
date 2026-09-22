@@ -1,10 +1,7 @@
 """Explicit skill contracts and bundled guidance; no automatic code loading."""
 
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from functools import lru_cache
-from hashlib import sha256
 from importlib.resources import files
 from typing import Literal
 
@@ -57,8 +54,6 @@ class SkillSpec(Boundary):
     version: SkillVersion = 1
     description: str
     instructions: str = Field(default="", max_length=8192)
-    aliases: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
     parameters: dict
     required_capabilities: list[str]
     resources: list[str]
@@ -160,8 +155,6 @@ def _skill(
     arguments,
     handler,
     description,
-    aliases,
-    tags,
     *,
     preconditions=(),
     recovery=(),
@@ -173,8 +166,6 @@ def _skill(
         SkillSpec(
             name=name,
             description=description,
-            aliases=aliases,
-            tags=tags,
             instructions=_GUIDES[guide],
             parameters=arguments.model_json_schema(),
             required_capabilities=[name],
@@ -196,26 +187,21 @@ SKILLS = {
             Empty,
             observe,
             "Read current object and robot evidence",
-            ["观察", "检测", "observe"],
-            ["perception"],
         ),
         _skill(
             "move_named_pose",
             MoveArgs,
             move_named_pose,
             "Move to a validated named joint pose",
-            ["移动", "回家", "move", "home"],
-            ["motion"],
             preconditions=("known_pose",),
         ),
         _skill(
             "move_relative",
             RelativeMoveArgs,
             move_relative,
-            "Offset the flange in world XYZ meters (up +Z, left +Y), at most 5 cm; "
-            "preserve endpoint orientation, joint-interpolated path without collision checking",
-            ["上", "下", "左", "右", "relative", "offset"],
-            ["motion"],
+            "Offset the flange in world XYZ meters at most 5 cm: up/down is ±Z, "
+            "left/right is ±Y, forward/back is ±X; preserve endpoint orientation, "
+            "joint-interpolated path without collision checking",
             preconditions=("reachable_target",),
             verification="wrs_fk",
         ),
@@ -224,8 +210,6 @@ SKILLS = {
             PickArgs,
             pick,
             "Acquire an observed object and verify holding",
-            ["抓取", "拿起", "pick"],
-            ["manipulation"],
             preconditions=("empty_gripper", "object_visible"),
             recovery=("observe_once",),
         ),
@@ -234,8 +218,6 @@ SKILLS = {
             PlaceArgs,
             place,
             "Place the held object at a known target",
-            ["放", "放置", "put", "place"],
-            ["manipulation"],
             preconditions=("object_held", "known_target"),
         ),
         _skill(
@@ -243,16 +225,12 @@ SKILLS = {
             PlaceArgs,
             verify,
             "Confirm object placement and empty gripper",
-            ["检查", "验证", "verify"],
-            ["verification"],
         ),
         _skill(
             "speak",
             SpeakArgs,
             speak,
             "Speak an utterance on the independent TTS node",
-            ["说", "播报", "speak", "say"],
-            ["audio"],
             resources=("speaker",),
             guide="speech",
             verification="virtual_utterance_complete",
@@ -281,36 +259,20 @@ def require_contract(name, version, offered, *, node_id=None, stage=None):
         raise AgentError("skill_version_mismatch", node_id=node_id, stage=stage)
 
 
-def registry_signature():
-    payload = {name: entry.spec.model_dump() for name, entry in sorted(SKILLS.items())}
-    return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+def lookup_skills(capabilities, bindings, *, limit=8):
+    """当前绑定与就绪能力下可用的技能合同，按名称排列。
 
-
-@lru_cache(maxsize=128)
-def _rank_candidates(query, signature, available):
-    # Cache names only. Permission and current capabilities are checked by every caller.
-    scores = {}
-    transfer = any(word in query for word in ("放", "put ", "place "))
-    for name in available:
-        spec = SKILLS[name].spec
-        score = sum(word.casefold() in query for word in [name, *spec.aliases, *spec.tags])
-        if transfer and name in {"observe", "pick", "place", "verify"}:
-            score += 1
-        scores[name] = score
-    ranked = sorted(available, key=lambda name: (-scores[name], name))
-    return tuple(name for name in ranked if scores[name]) or tuple(ranked)
-
-
-def lookup_skills(query, capabilities, bindings, *, limit=8):
+    这里不猜测意图：选用哪个技能由模型根据 description 和参数判断。limit 只防
+    prompt 失控，超过时按名称截断，真要处理大量技能需要显式的检索方案。
+    """
     if not 1 <= limit <= 16:
         raise ValueError("invalid_skill_limit")
-    available = tuple(
+    available = sorted(
         name
-        for name, entry in sorted(SKILLS.items())
+        for name, entry in SKILLS.items()
         if (cap := capabilities.get(bindings.get(name))) is not None
         and cap.skills.get(name) == entry.spec.version
         and set(entry.spec.required_capabilities).issubset(cap.skills)
     )
-    names = _rank_candidates(query.casefold().strip(), registry_signature(), available)
     # Return copies: callers cannot mutate the live registry through metadata lists.
-    return [SKILLS[name].spec.model_copy(deep=True) for name in names[:limit]]
+    return [SKILLS[name].spec.model_copy(deep=True) for name in available[:limit]]

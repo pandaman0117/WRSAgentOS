@@ -28,9 +28,15 @@ async def main():
             raise RuntimeError(f"启动播报未完成：{result.state}，{result.reason}")
         robot = await system.snapshot(node="wrs")
         speaker = await system.clients["tts"].capabilities()
-        print("WRS 准入：", robot.admission)
-        print("播报后端：", speaker.backend)
-        print("就绪。另开终端运行 wrs/07_viewer.py、voice/06_push_to_talk.py。", flush=True)
+        # 带历史去重日志重启时准入为 HELD；06 收到明确运动指令后才 allow_actions。
+        print("WRS 准入：", robot.admission, flush=True)
+        print("播报后端：", speaker.backend, flush=True)
+        print("就绪：tcp/127.0.0.1:7449，env wrs-demo。", flush=True)
+        print(
+            "另开终端从仓库根目录运行 examples/wrs/07_viewer.py（http://127.0.0.1:8000）"
+            "和 examples/voice/06_push_to_talk.py（需要 ASR 环境）。",
+            flush=True,
+        )
         await asyncio.Event().wait()
 
 

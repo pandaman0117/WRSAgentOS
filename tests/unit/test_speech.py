@@ -184,7 +184,7 @@ def test_asr_loader_is_local_chinese_command_profile(monkeypatch, tmp_path):
     assert called[0][0] == (str(tmp_path),)
     assert called[0][1]["local_files_only"] is True
     assert called[0][1]["max_inference_batch_size"] == 1
-    assert called[0][1]["max_new_tokens"] == 64
+    assert called[0][1]["max_new_tokens"] == 256
 
 
 def example_dispatch():
@@ -237,6 +237,23 @@ def test_speech_node_uses_own_interpreter_without_core_dependency_overlay(tmp_pa
     assert command[0] == str(interpreter)
     assert "-S" not in command and "scripts/run.py" not in command
     assert command[-4:] == ["--tts-backend", "qwen", "--tts-prepare", "正在上移。"]
+
+
+def test_capture_node_uses_own_interpreter_and_carries_its_vocabulary(tmp_path):
+    from wrs_agent.processes import LocalStack
+
+    interpreter = tmp_path / "python.exe"
+    interpreter.touch()
+    stack = LocalStack(bindings="tests/fixtures/asr.toml", asr_backend="qwen",
+                       asr_python=interpreter, asr_vocabulary=["机器人", "停止"])
+    stack.endpoint = "tcp/127.0.0.1:9999"
+    command = stack.node_command("asr")
+    assert command[0] == str(interpreter)
+    assert "-S" not in command and "scripts/run.py" not in command
+    assert command[-6:] == ["--asr-backend", "qwen",
+                            "--asr-vocabulary", "机器人", "--asr-vocabulary", "停止"]
+    # Capture options stay on the capture node; Voice keeps its own command.
+    assert "--asr-backend" not in stack.node_command("voice")
 
 
 @pytest.mark.parametrize("failure", ["write", "abort", "close"])

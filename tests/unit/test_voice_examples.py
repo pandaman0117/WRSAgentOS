@@ -1,8 +1,10 @@
 """Input examples preserve control priority; these tests never open audio devices."""
 
+import ast
 import asyncio
 import runpy
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -88,6 +90,15 @@ async def test_unconfirmed_robot_cannot_be_reopened_by_voice(listener, admission
     system.send_text.assert_not_awaited()
 
 
+async def test_unresolved_outcome_is_not_a_finished_task(listener, capsys):
+    """UNKNOWN 在 TERMINAL 里，但 Runtime 的 goal() 不收它：不知道动作有没有执行过。
+    客户端把它当成已结束就会一直撞上 task_not_available，而重说不会改变任何状态。"""
+    captured, system = idle_system(task_id="old", state="UNKNOWN")
+    assert await listener["submit_text"](system, "机器人，移动到 B", captured) is None
+    system.send_text.assert_not_awaited()
+    assert "停止" in capsys.readouterr().out
+
+
 async def test_fresh_goal_after_confirmed_stop_does_not_wait_for_planner(listener):
     captured, system = idle_system(task_id="old", state="CANCELLED")
     captured.admission = "HELD"
@@ -163,6 +174,22 @@ async def test_missing_glm_config_exits_before_launching_nodes(monkeypatch):
     monkeypatch.delenv("GLM_API_KEY", raising=False)
     with pytest.raises(SystemExit, match="GLM 配置错误"):
         await entry["main"]()
+
+
+def test_viewer_stays_within_the_synchronous_session_surface():
+    """The viewer needs a browser and a robot, so at least check every call it makes exists."""
+    from wrs_agent.sync import Session
+
+    source = ast.parse(Path("examples/voice/09_viewer.py").read_text(encoding="utf-8"))
+    used = {
+        node.attr
+        for node in ast.walk(source)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "system"
+    }
+    assert {"listen_begin", "listen_end", "listen_result", "nodes"} <= used
+    assert used <= set(dir(Session))
 
 
 def test_sync_launch_forwards_speech_configuration_without_loading_models(monkeypatch):

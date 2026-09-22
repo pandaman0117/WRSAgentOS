@@ -43,8 +43,11 @@ async def test_model_client_swappable():
         MockClient('{"kind":"answer","text":"first"}'),
         AlternateClient(),
     ]:
-        decision = await ModelPlanner(client).plan(request)
+        planner = ModelPlanner(client)
+        decision = await planner.plan(request)
         assert decision.kind == "answer"
+        # Measuring spans stays optional for a client; the Planner still times its own call.
+        assert planner.last_timing.total >= 0 and planner.last_timing.model is None
         await client.aclose()
 
 

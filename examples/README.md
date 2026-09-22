@@ -202,11 +202,14 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 先运行不读取 Key、不提交模型请求、不启动机器人的连通性检查：
 ```powershell
 ./scripts/run.ps1 scripts/check_glm_connection.py
-./scripts/run.ps1 scripts/check_glm_connection.py --trust-env
 ```
-第一条直连；第二条使用当前进程可见的系统/环境代理及 CA 设置。收到 401/404 等 HTTP 状态也说明该次网络连接成功，不代表 Key/模型权限已验证。TLS 握手失败或 DNS 错误发生在收到 HTTP 响应之前，不能据此判断 Key 是否正确。
+收到 401/404 等 HTTP 状态也说明该次网络连接成功，不代表 Key/模型权限已验证。TLS 握手失败或 DNS 错误发生在收到 HTTP 响应之前，不能据此判断 Key 是否正确。
 
-模型客户端默认直连。需要使用系统代理时，可在模型示例的环境中设置 `GLM_TRUST_ENV=1`；0/false 为直连，1/true 才使用 HTTPX 的代理/证书配置。使用方式见 [HTTPX 环境配置文档](https://www.python-httpx.org/environment_variables/)。本项目不会自动改变系统 DNS/代理、关闭 TLS 校验或切换计费端点；离线 HTTP 夹具不受这个开关影响，也不会走外部代理。
+模型客户端始终直连：不读取 `HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 等环境变量，环境里配置的代理不会静默承载机器人规划请求。本项目不会自动改变系统 DNS/代理、关闭 TLS 校验或切换计费端点。
+
+`GLM_THINKING` 可选，取值 `off`/`low`/`high`/`max`，留空则由账号模型自行决定。`off` 发送 `thinking.type=disabled`，其余三档发送 `thinking.type=enabled` 加对应的 `reasoning_effort`。思考越少等待越短、推理也越少；Runtime 仍会校验每个计划，退化的是计划质量而非它的边界。
+
+各档位被哪些模型接受由服务端决定，本项目不按模型名改写取值。厂商文档称 GLM-5.3 系列不接受 `off`（返回 HTTP 400、错误码 1210），但本仓库在 Coding Plan 端点上实测 `glm-5.3-flash` 接受了 `off` 且明显更快，因此以实测为准、遇到 400 再改 `low`。`reasoning_effort` 仅 GLM-5.2 及以上读取，更早的模型会忽略它。Coding Plan 端点对各档位的映射与标准 API 文档不同，换模型后需实测确认。
 
 ## 中文语音与独立播报
 

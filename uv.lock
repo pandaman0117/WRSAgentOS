@@ -20,7 +20,8 @@ name = "accelerate"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", version = "0.36.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
     { name = "numpy" },
     { name = "packaging" },
     { name = "psutil" },
@@ -302,6 +303,24 @@ wheels = [
 ]
 
 [[package]]
+name = "faster-qwen3-tts"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
+    { name = "qwen-tts-hf" },
+    { name = "soundfile" },
+    { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
+    { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
+    { name = "transformers", version = "5.15.1", source = { registry = "https://pypi.org/simple" } },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/82/dde40fe2fb552eb52c767f6a64b0c98b9b7586eb65bb2aa82e595c9b1e32/faster_qwen3_tts-0.4.0.tar.gz", hash = "sha256:6f088186aaf92b7b8e3f35250cca112e9da037835d03784d26975a3ef533ebf2", size = 94690, upload-time = "2026-08-25T13:45:00.034Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/4c/f18001de4637997c35303fe47b46b99e655387d3980d260a39dd5289eaae/faster_qwen3_tts-0.4.0-py3-none-any.whl", hash = "sha256:96e1d83bb44414f3c48eeb100d2453f3005752556153d460dd471c4910047509", size = 43141, upload-time = "2026-08-25T13:44:58.458Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "4.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -356,7 +375,8 @@ dependencies = [
     { name = "groovy" },
     { name = "hf-gradio" },
     { name = "httpx" },
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", version = "0.36.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
     { name = "jinja2" },
     { name = "markupsafe" },
     { name = "numpy" },
@@ -389,7 +409,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fsspec" },
     { name = "httpx" },
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", version = "0.36.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
     { name = "packaging" },
     { name = "typing-extensions" },
 ]
@@ -477,19 +498,49 @@ wheels = [
 name = "huggingface-hub"
 version = "0.36.2"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "sys_platform != 'linux' and sys_platform != 'win32'",
+]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "fsspec", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "hf-xet", marker = "(platform_machine == 'aarch64' and extra == 'extra-9-wrs-agent-qwen-asr') or (platform_machine == 'amd64' and extra == 'extra-9-wrs-agent-qwen-asr') or (platform_machine == 'arm64' and extra == 'extra-9-wrs-agent-qwen-asr') or (platform_machine == 'x86_64' and extra == 'extra-9-wrs-agent-qwen-asr') or (extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
+    { name = "packaging", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "pyyaml", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "requests", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "tqdm", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "typing-extensions", marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7c/b7/8cb61d2eece5fb05a83271da168186721c450eb74e3c31f7ef3169fa475b/huggingface_hub-0.36.2.tar.gz", hash = "sha256:1934304d2fb224f8afa3b87007d58501acfda9215b334eed53072dd5e815ff7a", size = 649782, upload-time = "2026-02-06T09:24:13.098Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a8/af/48ac8483240de756d2438c380746e7130d1c6f75802ef22f3c6d49982787/huggingface_hub-0.36.2-py3-none-any.whl", hash = "sha256:48f0c8eac16145dfce371e9d2d7772854a4f591bcb56c9cf548accf531d54270", size = 566395, upload-time = "2026-02-06T09:24:11.133Z" },
+]
+
+[[package]]
+name = "huggingface-hub"
+version = "1.32.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "sys_platform != 'linux' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "click", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "filelock", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "fsspec", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "hf-xet", marker = "(platform_machine == 'AMD64' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine == 'aarch64' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine == 'amd64' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine == 'arm64' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine == 'x86_64' and extra == 'extra-9-wrs-agent-qwen-tts') or (extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
+    { name = "httpx", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "packaging", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "pyyaml", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "tqdm", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+    { name = "typing-extensions", marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/0f/e83fdd856da8fca26bf78d71709ebd120432a0ce535e72b9597cab1eb5bf/huggingface_hub-1.32.0.tar.gz", hash = "sha256:ed70a45498abe86039df7c2f4e5f7575de524be908d3840e8f828d5525eafd6a", size = 1038662, upload-time = "2026-09-17T10:27:48.049Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/cf/d98dd561d6d0d7b7d7a64d1563f8aaaa7c235daee41c1c9bcc3da62420ed/huggingface_hub-1.32.0-py3-none-any.whl", hash = "sha256:b0c7c80561969d9cdacdd55fce67ba9584cca0b9d4ea80957a3a5c1445fac5c8", size = 842906, upload-time = "2026-09-17T10:27:46.102Z" },
 ]
 
 [[package]]
@@ -1229,8 +1280,8 @@ wheels = [
 ]
 
 [[package]]
-name = "qwen-tts"
-version = "0.1.1"
+name = "qwen-tts-hf"
+version = "0.1.1.post1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
@@ -1243,11 +1294,11 @@ dependencies = [
     { name = "torchaudio", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine != 'aarch64' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_python_implementation != 'CPython' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform != 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torchaudio", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torchaudio", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform != 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
-    { name = "transformers", version = "4.57.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "transformers", version = "5.15.1", source = { registry = "https://pypi.org/simple" } },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/5d/b339c4f34f22ce838d39d1c015bbad103cd4003f6826ac3afaf1553973a0/qwen_tts-0.1.1.tar.gz", hash = "sha256:afba5fa235806a6883f46a389e67540b46f8a55da457216bf1d7342903814780", size = 114131, upload-time = "2026-02-06T04:10:53.454Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/96/e9e251f36293c970cd264688abe549e33e5a73acc2c40e543a1a3b3ef10c/qwen_tts_hf-0.1.1.post1.tar.gz", hash = "sha256:00481bf9379164e2049be0e3cfbb7286c9fe2359b1ef089c583c1b93fdda2875", size = 115679, upload-time = "2026-08-25T13:37:49.692Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/01/95f3ae26f5b7eb2105f69ad2c15af5a28b9ebdd1258a0b27541f5ebd6225/qwen_tts-0.1.1-py3-none-any.whl", hash = "sha256:11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d", size = 113529, upload-time = "2026-02-06T04:10:51.716Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/14/57e0ba0b84535102e08f33f1e14a2e0975229f5b878290343705727a3a33/qwen_tts_hf-0.1.1.post1-py3-none-any.whl", hash = "sha256:ed5b7aae64cf795243369fb5226173f459a45689ea86db1c6d3eb14fc0c2c01d", size = 115212, upload-time = "2026-08-25T13:37:48.53Z" },
 ]
 
 [[package]]
@@ -1558,7 +1609,8 @@ name = "tokenizers"
 version = "0.22.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", version = "0.36.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-asr'" },
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-wrs-agent-qwen-tts'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/73/6f/f80cfef4a312e1fb34baf7d85c72d4411afde10978d4657f8cdd811d3ccc/tokenizers-0.22.2.tar.gz", hash = "sha256:473b83b915e547aa366d1eee11806deaf419e17be16310ac0a14077f1e28f917", size = 372115, upload-time = "2026-01-05T10:45:15.988Z" }
 wheels = [
@@ -1710,32 +1762,6 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "4.57.3"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or sys_platform == 'win32'",
-    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
-    "sys_platform != 'linux' and sys_platform != 'win32'",
-]
-dependencies = [
-    { name = "filelock" },
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "regex" },
-    { name = "requests" },
-    { name = "safetensors" },
-    { name = "tokenizers" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/70/d42a739e8dfde3d92bb2fff5819cbf331fe9657323221e79415cd5eb65ee/transformers-4.57.3.tar.gz", hash = "sha256:df4945029aaddd7c09eec5cad851f30662f8bd1746721b34cc031d70c65afebc", size = 10139680, upload-time = "2025-11-25T15:51:30.139Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/6b/2f416568b3c4c91c96e5a365d164f8a4a4a88030aa8ab4644181fdadce97/transformers-4.57.3-py3-none-any.whl", hash = "sha256:c77d353a4851b1880191603d36acb313411d3577f6e2897814f333841f7003f4", size = 11993463, upload-time = "2025-11-25T15:51:26.493Z" },
-]
-
-[[package]]
-name = "transformers"
 version = "4.57.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
@@ -1745,7 +1771,7 @@ resolution-markers = [
 ]
 dependencies = [
     { name = "filelock" },
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", version = "0.36.2", source = { registry = "https://pypi.org/simple" } },
     { name = "numpy" },
     { name = "packaging" },
     { name = "pyyaml" },
@@ -1758,6 +1784,31 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c4/35/67252acc1b929dc88b6602e8c4a982e64f31e733b804c14bc24b47da35e6/transformers-4.57.6.tar.gz", hash = "sha256:55e44126ece9dc0a291521b7e5492b572e6ef2766338a610b9ab5afbb70689d3", size = 10134912, upload-time = "2026-01-16T10:38:39.284Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/03/b8/e484ef633af3887baeeb4b6ad12743363af7cce68ae51e938e00aaa0529d/transformers-4.57.6-py3-none-any.whl", hash = "sha256:4c9e9de11333ddfe5114bc872c9f370509198acf0b87a832a0ab9458e2bd0550", size = 11993498, upload-time = "2026-01-16T10:38:31.289Z" },
+]
+
+[[package]]
+name = "transformers"
+version = "5.15.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "sys_platform != 'linux' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "tqdm" },
+    { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/92/c50c61da7046bbb59a4d011291aeadcfb4d7980ab36fdb31e93823a3fb93/transformers-5.15.1.tar.gz", hash = "sha256:27c996bd9075ddc82d40f8590dfdc81ea45f611bfca477e0db5d7fd257a482f7", size = 9378434, upload-time = "2026-08-19T11:28:20.33Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/c4/a12e1d9b387fb0c40a57116db82b457e8c771cb419163cda29204d74a595/transformers-5.15.1-py3-none-any.whl", hash = "sha256:b7cdf238ff583e3a58dbc7fa34da1aaf091ce063141f65a30538160bd5afe93f", size = 11749582, upload-time = "2026-08-19T11:28:16.726Z" },
 ]
 
 [[package]]
@@ -1871,13 +1922,14 @@ qwen-asr = [
     { name = "torchaudio", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-asr') or (sys_platform != 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
 ]
 qwen-tts = [
-    { name = "qwen-tts" },
+    { name = "faster-qwen3-tts" },
     { name = "sounddevice" },
     { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torchaudio", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine != 'aarch64' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_python_implementation != 'CPython' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform != 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torchaudio", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
     { name = "torchaudio", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform == 'win32' and extra == 'extra-9-wrs-agent-qwen-tts') or (sys_platform != 'linux' and extra == 'extra-9-wrs-agent-qwen-asr' and extra == 'extra-9-wrs-agent-qwen-tts')" },
+    { name = "transformers", version = "5.15.1", source = { registry = "https://pypi.org/simple" } },
 ]
 
 [package.dev-dependencies]
@@ -1891,10 +1943,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "eclipse-zenoh", specifier = "==1.9.0" },
+    { name = "faster-qwen3-tts", marker = "extra == 'qwen-tts'", specifier = "==0.4.0" },
     { name = "httpx", marker = "extra == 'glm'", specifier = ">=0.28,<0.29" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "qwen-asr", marker = "extra == 'qwen-asr'", specifier = "==0.0.6" },
-    { name = "qwen-tts", marker = "extra == 'qwen-tts'", specifier = "==0.1.1" },
     { name = "sounddevice", marker = "extra == 'qwen-asr'", specifier = ">=0.5,<0.6" },
     { name = "sounddevice", marker = "extra == 'qwen-tts'", specifier = ">=0.5,<0.6" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'qwen-asr') or (sys_platform == 'win32' and extra == 'qwen-asr')", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128" },
@@ -1905,6 +1957,7 @@ requires-dist = [
     { name = "torchaudio", marker = "(sys_platform == 'linux' and extra == 'qwen-tts') or (sys_platform == 'win32' and extra == 'qwen-tts')", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchaudio", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'qwen-asr'", specifier = "==2.9.0" },
     { name = "torchaudio", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'qwen-tts'", specifier = "==2.9.0" },
+    { name = "transformers", marker = "extra == 'qwen-tts'", specifier = "==5.15.1" },
 ]
 provides-extras = ["glm", "qwen-tts", "qwen-asr"]
 

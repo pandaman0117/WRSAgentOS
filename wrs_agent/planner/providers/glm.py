@@ -1,9 +1,12 @@
 """GLM Chat Completions adapter. Proposes plans; never executes provider tools."""
 
 import asyncio
+import json
 import os
 import socket
 import ssl
+import time
+from dataclasses import replace
 from typing import Literal
 
 import httpx
@@ -11,7 +14,7 @@ from pydantic import Field, ValidationError
 
 from wrs_agent.errors import AgentError
 from wrs_agent.planner import PlanDecision
-from wrs_agent.planner.providers import ModelReply, ModelRequest
+from wrs_agent.planner.providers import ModelReply, ModelRequest, ModelTiming
 from wrs_agent.schemas import MAX_BYTES, Boundary, decode, encode
 
 CODING_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
@@ -27,7 +30,9 @@ class GLMConfig(Boundary):
     protocol: Literal["chat_completions"] = "chat_completions"
     tool_calling: Literal[True] = True
     stream: Literal[False] = False
-    trust_env: bool = False
+    # None omits both reasoning fields, leaving the account's model default. Less reasoning
+    # trades planning quality for latency; Runtime still validates every plan before execution.
+    thinking: Literal["off", "low", "high", "max"] | None = None
     timeout_s: float = Field(default=20.0, gt=0, le=120)
     max_tokens: int = Field(default=2048, ge=128, le=8192)
 
@@ -37,13 +42,13 @@ class GLMConfig(Boundary):
         model = os.environ.get("GLM_MODEL", "")
         if not model.strip():
             raise GLMError("glm_model_missing")
-        trust_env = os.environ.get("GLM_TRUST_ENV", "0").strip().lower()
-        if trust_env not in {"", "0", "1", "false", "true"}:
-            raise GLMError("glm_trust_env_invalid")
+        thinking = os.environ.get("GLM_THINKING", "").strip().lower()
+        if thinking not in {"", "off", "low", "high", "max"}:
+            raise GLMError("glm_thinking_invalid")
         try:
             return cls(
                 model=model,
-                trust_env=trust_env in {"1", "true"},
+                thinking=thinking or None,
                 base_url=os.environ.get("GLM_BASE_URL", CODING_BASE_URL).rstrip("/"),
             )
         except ValidationError as exc:
@@ -87,8 +92,17 @@ def transport_error_code(exc):
     return "glm_transport_error"
 
 
+def encode_for_model(value: dict) -> str:
+    """Serialize for a tokenizer, not for decode(). The wire codec escapes non-ASCII, which
+    a peer decodes back but a model reads as literal backslash-u text at twice the tokens."""
+    result = json.dumps(value, allow_nan=False, separators=(",", ":"), ensure_ascii=False)
+    if len(result.encode()) > MAX_BYTES:
+        raise ValueError("payload_too_large")
+    return result
+
+
 def request_body(request: ModelRequest, config: GLMConfig) -> dict:
-    return {
+    body = {
         "model": config.model,
         "stream": config.stream,
         "max_tokens": config.max_tokens,
@@ -99,14 +113,17 @@ def request_body(request: ModelRequest, config: GLMConfig) -> dict:
                     "You propose plans for WRS-Agent. You cannot execute actions. "
                     "Use only the supplied skills and observed objects; never invent coordinates. "
                     "Submit at most one propose_plan call, or answer a question as plain text. "
-                    "Dependencies must be acyclic. Include verification after manipulation. "
+                    "Dependencies must be acyclic, and steps sharing a resource must be ordered. "
+                    "Include verification after manipulation, depending on the step it verifies. "
+                    # Runtime discards prose on executable plans; generating it still costs time.
+                    "Leave text empty when the plan is executable; the steps are the answer. "
                     "Unknown or ambiguous goals require clarification. "
                     "Never supply execution IDs, permissions, boot IDs or control epochs."
                 ),
             },
             {
                 "role": "user",
-                "content": encode({"goal": request.goal, "context": request.context}).decode(),
+                "content": encode_for_model({"goal": request.goal, "context": request.context}),
             },
         ],
         "tools": [
@@ -121,6 +138,15 @@ def request_body(request: ModelRequest, config: GLMConfig) -> dict:
         ],
         "tool_choice": "auto",
     }
+    if config.thinking == "off":
+        # GLM-5.3 rejects a disabled type and wants "low" instead; models older than GLM-4.5
+        # reject the field itself, so an unset config must still send neither field.
+        body["thinking"] = {"type": "disabled"}
+    elif config.thinking is not None:
+        # Only GLM-5.2 and newer read the effort; older models accept and ignore it.
+        body["thinking"] = {"type": "enabled"}
+        body["reasoning_effort"] = config.thinking
+    return body
 
 
 def parse_reply(data: bytes) -> ModelReply:
@@ -188,22 +214,20 @@ class GLMClient:
         if not key or len(key) > 512 or not key.isascii() or any(c.isspace() for c in key):
             raise GLMError("glm_api_key_missing_or_invalid")
         self.config = config
-        network = transport
-        if network is None and not config.trust_env:
-            network = httpx.AsyncHTTPTransport(retries=1, trust_env=False)
         self._http = httpx.AsyncClient(
             base_url=config.base_url + "/",
             headers={"Authorization": f"Bearer {key}", "User-Agent": "WRS-Agent/0.1.0"},
             timeout=config.timeout_s,
             follow_redirects=False,
-            # A custom HTTP transport disables HTTPX environment proxy discovery.
-            # Use its standard transport when the user opts into system proxy/CA settings.
-            trust_env=config.trust_env if transport is None else False,
-            transport=network,
+            # An explicit transport disables HTTPX environment proxy discovery, and its
+            # trust_env keeps SSL_CERT_FILE/SSL_CERT_DIR out of the TLS context. The retry
+            # covers connection setup only: a request already sent is never repeated.
+            transport=transport or httpx.AsyncHTTPTransport(retries=1, trust_env=False),
         )
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         body = request_body(request, self.config)
+        started, first_byte = time.perf_counter(), None
         try:
             async with asyncio.timeout(self.config.timeout_s):
                 async with self._http.stream("POST", "chat/completions", json=body) as response:
@@ -211,10 +235,21 @@ class GLMClient:
                         raise GLMError(f"glm_http_{response.status_code}")
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
+                        if first_byte is None:
+                            first_byte = time.perf_counter()
                         if len(data) + len(chunk) > MAX_BYTES:
                             raise GLMError("glm_reply_too_large")
                         data.extend(chunk)
-            return parse_reply(bytes(data))
+            received = time.perf_counter()
+            reply = parse_reply(bytes(data))  # An empty body fails here, so first_byte is set.
+            done = time.perf_counter()
+            timing = ModelTiming(
+                total=done - started,
+                wait=first_byte - started,
+                receive=received - first_byte,
+                parse=done - received,
+            )
+            return replace(reply, timing=timing)
         except (httpx.TimeoutException, TimeoutError):
             raise GLMError("glm_timeout") from None
         except httpx.HTTPError as exc:

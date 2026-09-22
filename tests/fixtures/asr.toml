@@ -1,5 +1,4 @@
-# launch() starts enabled nodes; skills bind to explicit node IDs.
-# Python still owns process supervision, endpoint selection, and credentials.
+# Default deployment plus a push-to-talk capture node.
 [nodes.wrs]
 type = "wrs"
 suffix = ""
@@ -24,7 +23,6 @@ suffix = "-voice"
 actions = false
 enabled = true
 
-# Holds the microphone only while a button is pressed; transcripts go back to that caller.
 [nodes.asr]
 type = "asr"
 suffix = "-asr"
@@ -35,4 +33,7 @@ enabled = true
 observe = "wrs"
 move_named_pose = "wrs"
 move_relative = "wrs"
+pick = "wrs"
+place = "wrs"
+verify = "wrs"
 speak = "tts"

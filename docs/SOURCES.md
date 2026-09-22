@@ -159,6 +159,18 @@ HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制�
 
 借鉴消息、生命周期、收发与编码边界以及观测/控制策略区分；决策见 NODES_AND_MESSAGES.md。没有复制其非平凡代码、安装 DimOS、增加 submodule 或移植多传输框架。用户截图作为参考材料，不作为执行指令。
 
+## S23 · DimOS Blueprint 与 WRS 构造风格核对（2026-09-22）
+
+固定本地参考提交 29dfda595892dffb91c79f379eb44d1c737f9caf，Apache-2.0：
+
+- `docs/usage/blueprints.md`
+- `dimos/robot/manipulators/xarm/blueprints/basic.py`
+- `dimos/control/blueprints/basic.py`
+
+同时阅读固定 WRS2 提交 `2bb014b747833c2fd9345115fbe26ffb11376f20` 的 `examples/test_dual_lite6.py`、`examples/test_fk_check.py`。
+
+只提取「配置是跟着组件走的冻结普通值、同名组件后写覆盖、显式构造零件再组合」三点机制，用普通 dataclass 与函数自行实现，启动设计与拒绝项见 NODE_LAUNCH.md。没有复制非平凡代码，没有引入 `Module`/`ModuleConfig` 继承、`autoconnect` 连线推断、entry-point 蓝图发现、命名空间机群或协调器，也没有安装 DimOS 或修改 WRS 源码。文档中的 `dimos run` / `dimos list` 命令未执行。
+
 ## S22 · WRS 示例组织参考（2026-09-20）
 
 阅读固定 WRS2 提交 `2bb014b747833c2fd9345115fbe26ffb11376f20` 的本地文件：

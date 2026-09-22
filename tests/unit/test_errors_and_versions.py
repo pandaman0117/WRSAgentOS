@@ -175,7 +175,7 @@ def test_version_drift_invalidates_lookup_and_cached_plan():
     caps["wrs"] = cap.model_copy(update={"skills": {**cap.skills, "pick": 2}})
     assert cache.lookup("put A in B", worlds, caps, BINDINGS) is None
     assert cache.reject_reason == "skill_version_mismatch"
-    assert "pick" not in {s.name for s in lookup_skills("pick", caps, BINDINGS)}
+    assert "pick" not in {s.name for s in lookup_skills(caps, BINDINGS)}
 
 
 def test_step_uses_registered_version_without_changing_the_public_call(monkeypatch):

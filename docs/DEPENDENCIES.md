@@ -96,7 +96,9 @@ M3 科学包路径补充：指定 venv 的 pyvenv.cfg 设置 include-system-site
 
 ## Qwen 语音可选依赖
 
-实际选用 Qwen3-ASR-0.6B、Qwen3-TTS-12Hz-0.6B-CustomVoice；qwen-asr 0.0.6 / qwen-tts 0.1.1 官方包的 Transformers 精确依赖冲突，通过互斥 uv extras 与两个 .local/venvs 环境隔离。Torch/Torchaudio 2.9.0 CU128；核心默认依赖不增加模型 SDK。固定模型资源、校验与安装入口见 [Qwen 语音指南](QWEN_SPEECH.md)。普通 pip 也可分别安装两个 extra，但复现版本以 uv.lock 与 setup_speech.ps1 为准。
+实际选用 Qwen3-ASR-0.6B、Qwen3-TTS-12Hz-0.6B-CustomVoice；qwen-asr 0.0.6 与 TTS 侧 faster-qwen3-tts 0.4.0 的 Transformers 精确依赖冲突（4.57.6 与 5.15.1），通过互斥 uv extras 与两个 .local/venvs 环境隔离。Torch/Torchaudio 2.9.0 CU128；核心默认依赖不增加模型 SDK。固定模型资源、校验与安装入口见 [Qwen 语音指南](QWEN_SPEECH.md)。普通 pip 也可分别安装两个 extra，但复现版本以 uv.lock 与 setup_speech.ps1 为准。
 
+
+2026-09-23：TTS 后端由官方 qwen-tts 0.1.1 换为 faster-qwen3-tts 0.4.0（MIT，CUDA graph 加速），实测短句提速 4.8 倍、41 字长句 6.4 倍，详见 [Qwen 语音指南](QWEN_SPEECH.md)。它硬依赖 `qwen-tts-hf` 0.1.1.post1 顶替官方 `qwen-tts`（同名 `qwen_tts` 包不可共存）并要求 Transformers 5.x；Transformers 固定 5.15.1，因为 5.17.0 会在其 rope 兼容层对 Mimi codec 配置抛 AttributeError。变更限于 `.local/venvs/qwen-tts`，ASR 的 Transformers 4.57.6 与共享环境不受影响；uv.lock 由工具重新生成，`uv pip check` 93 包全部兼容。`qwen-tts-hf` 自述为非官方临时兼容构建，PyPI 仅一个版本、无授权声明、无仓库链接，作者字段沿用上游而非实际维护者；接受此来源风险是用户的明确决定，登记在此以备复核。
 
 2026-09-22：用户明确要求将 ASR 装入已有 `D:\code\venv312\.venv`。使用 uv pip install 增量安装 qwen-asr 0.0.6、torchaudio 2.9.0+cu128、sounddevice 0.5.6，并约束保留已有可见依赖；未对该共享环境运行 sync。Transformers 4.57.6 要求 huggingface-hub<1，因此仅将已有 hub 1.3.2 调整为 0.36.2，其余原包保留。SDK/语音依赖仍在 pyproject 的 qwen-asr extra 中；默认 setup_speech.ps1 继续提供隔离安装，TTS 使用原独立环境。共享环境已有两项与此次无关的缺失：joycon-robotics 的 hid 与 scipy-stubs 的 optype；安装后未新增依赖检查错误。

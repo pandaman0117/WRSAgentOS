@@ -67,6 +67,106 @@ async def test_native_tool_roundtrip_and_reused_client(monkeypatch):
     assert client._http.is_closed
 
 
+def test_thinking_is_omitted_until_explicitly_configured():
+    """Models older than GLM-4.5 reject the field, so an unset config sends neither."""
+    from wrs_agent.planner.providers.glm import request_body
+
+    body = request_body(REQUEST, GLMConfig(model="fixture"))
+    assert "thinking" not in body and "reasoning_effort" not in body
+
+
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_effort_levels_keep_thinking_enabled(effort):
+    """GLM-5.3 accepts only an enabled type, and reads the depth from reasoning_effort."""
+    from wrs_agent.planner.providers.glm import request_body
+
+    body = request_body(REQUEST, GLMConfig(model="fixture", thinking=effort))
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["reasoning_effort"] == effort
+
+
+def test_off_disables_thinking_without_claiming_an_effort():
+    """GLM-5.3 rejects this server-side; the adapter never rewrites it into a level."""
+    from wrs_agent.planner.providers.glm import request_body
+
+    body = request_body(REQUEST, GLMConfig(model="fixture", thinking="off"))
+    assert body["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in body
+
+
+def test_model_reads_text_not_wire_escapes():
+    """encode() escapes non-ASCII for peers that decode it; a model would read the escape."""
+    from wrs_agent.planner.providers.glm import request_body
+
+    goal = "将机械臂移动到命名姿态 B。"
+    request = ModelRequest(goal, {"world": {"held": "工件"}, "skills": []})
+    content = request_body(request, GLMConfig(model="fixture"))["messages"][1]["content"]
+    assert goal in content and "工件" in content
+    assert "\\u" not in content
+    assert json.loads(content)["goal"] == goal
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [("", None), ("off", "off"), ("low", "low"), ("HIGH", "high"), (" max ", "max")],
+)
+def test_thinking_from_environment(monkeypatch, configured, expected):
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_THINKING", configured)
+    assert GLMConfig.from_env().thinking == expected
+
+
+@pytest.mark.parametrize("stale", ["0", "1", "true", "disabled"])
+def test_superseded_boolean_thinking_fails_loudly(monkeypatch, stale):
+    """A boolean left from the old contract must not silently mean the account default."""
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_THINKING", stale)
+    with pytest.raises(GLMError, match="^glm_thinking_invalid$"):
+        GLMConfig.from_env()
+
+
+def test_invalid_thinking_is_safe(monkeypatch):
+    monkeypatch.setenv("GLM_MODEL", "fixture")
+    monkeypatch.setenv("GLM_THINKING", "private-invalid-value")
+    with pytest.raises(GLMError, match="^glm_thinking_invalid$") as error:
+        GLMConfig.from_env()
+    assert "private" not in error.value.error.model_dump_json()
+
+
+async def test_timing_splits_one_call_into_spans():
+    """Spans are observation, so assert structure and ordering, never wall-clock values."""
+    client = GLMClient(
+        GLMConfig(model="fixture"),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=reply_body())),
+    )
+    planner = ModelPlanner(client)
+    try:
+        await planner.plan(PlanRequest(user_goal="put A in B", world={}, skills=[]))
+        timing, model = planner.last_timing, planner.last_timing.model
+        assert min(model.total, model.wait, model.receive, model.parse) >= 0
+        assert model.wait + model.receive + model.parse == pytest.approx(model.total)
+        assert timing.total >= model.total and timing.validate >= 0
+        # Counts come from the reply, so they stay out of the locally measured spans.
+        assert planner.last_usage == reply_body()["usage"]
+        assert not hasattr(timing, "usage")
+    finally:
+        await client.aclose()
+
+
+async def test_failed_planning_keeps_no_stale_spans():
+    def fail(request):
+        raise httpx.ConnectError("private", request=request)
+
+    client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(fail))
+    planner = ModelPlanner(client)
+    try:
+        with pytest.raises(GLMError):
+            await planner.plan(PlanRequest(user_goal="goal", world={}, skills=[]))
+        assert planner.last_timing is None and planner.last_usage == {}
+    finally:
+        await client.aclose()
+
+
 @pytest.mark.parametrize("content", ["Still planning.", '{"kind":"execute","plan":{"steps":[]}}'])
 def test_text_is_answer_never_executable(content):
     body = reply_body()
@@ -358,42 +458,22 @@ async def test_connection_check_sends_no_key_and_accepts_http_error_as_reachable
         lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
     )
     entry = runpy.run_path(str(ROOT / "scripts/check_glm_connection.py"))
-    assert await entry["check"](CODING_BASE_URL, trust_env=False) == 0
+    assert await entry["check"](CODING_BASE_URL) == 0
     assert len(requests) == 1
     assert "private" not in capsys.readouterr().out
 
-@pytest.mark.parametrize(
-    "configured,expected", [("0", False), ("1", True), ("true", True), ("false", False)]
-)
-def test_explicit_environment_network_option(monkeypatch, configured, expected):
-    monkeypatch.setenv("GLM_MODEL", "fixture")
-    monkeypatch.setenv("GLM_BASE_URL", CODING_BASE_URL)
-    monkeypatch.setenv("GLM_TRUST_ENV", configured)
-    assert GLMConfig.from_env().trust_env is expected
-
-
-def test_invalid_environment_network_option_is_safe(monkeypatch):
-    monkeypatch.setenv("GLM_MODEL", "fixture")
-    monkeypatch.setenv("GLM_TRUST_ENV", "private-invalid-value")
-    with pytest.raises(GLMError, match="^glm_trust_env_invalid$") as error:
-        GLMConfig.from_env()
-    assert "private" not in error.value.error.model_dump_json()
-
-
-@pytest.mark.parametrize("trust_env", [False, True])
-async def test_live_client_proxy_selection_is_explicit_without_sending_requests(
-    monkeypatch, trust_env
-):
+async def test_live_client_never_uses_environment_proxy_without_sending_requests(monkeypatch):
     monkeypatch.setenv("GLM_API_KEY", "offline-key-no-request")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("NO_PROXY", "")
     monkeypatch.delenv("ALL_PROXY", raising=False)
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
-    client = GLMClient(GLMConfig(model="fixture", trust_env=trust_env), live_model=True)
+    client = GLMClient(GLMConfig(model="fixture"), live_model=True)
     try:
+        # A proxy in the environment must never silently carry robot planning requests.
         selected = client._http._transport_for_url(httpx.URL(CODING_BASE_URL))
-        assert (selected is not client._http._transport) is trust_env
+        assert selected is client._http._transport
     finally:
         await client.aclose()
 
@@ -408,7 +488,7 @@ async def test_offline_fixture_never_uses_environment_proxy(monkeypatch):
         return httpx.Response(200, json=reply_body())
 
     transport = httpx.MockTransport(respond)
-    client = GLMClient(GLMConfig(model="fixture", trust_env=True), transport=transport)
+    client = GLMClient(GLMConfig(model="fixture"), transport=transport)
     try:
         assert (await client.complete(REQUEST)).finish == "complete"
         assert len(requests) == 1

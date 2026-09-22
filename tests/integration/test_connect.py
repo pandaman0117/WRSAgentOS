@@ -113,7 +113,7 @@ async def test_configured_node_can_join_after_connect_without_rebuilding_client(
                 await stack._wait_ready(tts.transport, "request/capabilities")
                 await eventually(client.nodes, lambda items: items["tts"]["ready"])
                 assert client.clients["tts"] is tts
-                assert [s.name for s in await client.skills("播报")] == ["speak"]
+                assert "speak" in {s.name for s in await client.skills()}
                 action = await client.action("speak", text="joined later")
                 assert (await action.wait()).state == "SUCCEEDED"
                 assert (await client.snapshot()).data.robot.pose == "home"

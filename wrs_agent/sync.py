@@ -115,8 +115,8 @@ class Session:
     def nodes(self):
         return self._call(self._system.nodes)
 
-    def skills(self, query=""):
-        return self._call(self._system.skills, query)
+    def skills(self):
+        return self._call(self._system.skills)
 
     def start(self, *steps):
         return TaskHandle(self, self._call(self._system.start, *steps))
@@ -135,6 +135,15 @@ class Session:
             is_final=is_final,
             confidence=confidence,
         )
+
+    def listen_begin(self, press_id=None):
+        return self._call(self._system.listen_begin, press_id)
+
+    def listen_end(self, press_id):
+        return self._call(self._system.listen_end, press_id)
+
+    def listen_result(self, press_id):
+        return self._call(self._system.listen_result, press_id)
 
     def status(self):
         return self._call(self._system.status)
@@ -158,6 +167,7 @@ class Session:
 def launch(
     *, backend="mock", duration=0.4, bindings=None, scene=None, port=0, site="local", env_id=None,
     tts_backend="mock", tts_python=None, tts_prepared_texts=(),
+    asr_backend="mock", asr_python=None, asr_script=(), asr_vocabulary=(),
 ):
     """Start configured local nodes; close owned nodes and router on exit."""
     return _session(
@@ -167,6 +177,10 @@ def launch(
             tts_backend=tts_backend,
             tts_python=tts_python,
             tts_prepared_texts=tts_prepared_texts,
+            asr_backend=asr_backend,
+            asr_python=asr_python,
+            asr_script=asr_script,
+            asr_vocabulary=asr_vocabulary,
             duration=duration,
             bindings=bindings,
             port=port,

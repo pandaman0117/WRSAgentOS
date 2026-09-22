@@ -1,6 +1,6 @@
 # 节点与消息：V1 如何借鉴 DimOS
 
-V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Module/Stream/Topic 类体系。借鉴组件拥有自己的生命周期、消息合同与输入输出边界；目前没有必要搬入 DimOS 的自动连接、Blueprint、多传输及编码 mixin。
+V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Module/Stream/Topic 类体系。借鉴组件拥有自己的生命周期、消息合同与输入输出边界；目前没有必要搬入 DimOS 的自动连接、多传输及编码 mixin。Blueprint 只取「配置是跟着组件走的普通值」这一点，设计与取舍见 [节点启动](NODE_LAUNCH.md)。
 
 ## 四个词对应什么
 
@@ -10,6 +10,7 @@ V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Modul
 | Stream | 组件持续输出的数据，如图像、识别片段、进度 | 是 Event/Stream 的通信场景。暂不增加可组合 Stream 类、操作符或响应式依赖 |
 | Topic | 发布订阅使用的地址 | 使用 Zenoh key 字符串和既有前缀/后缀。规范命名即可，不需要 Topic 对象 |
 | Message | 一次传输的数据 | 使用现有 Pydantic 消息合同。长期动作仍需要编号、受理、进度、终态和取消语义 |
+| Blueprint | 怎样配置并启动一组组件 | 借鉴蓝图是冻结的普通值、后写覆盖；不引入 autoconnect、entry-point 发现、命名空间机群和协调器。见 [节点启动](NODE_LAUNCH.md) |
 
 这些词描述不同层面，并不是四个必须实例化的业务对象。给一条消息选地址、把消息持续发布出去，并不要求使用者先构造四层类。以上定义来自 DimOS 的 [传输说明](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/transports/index.md)。
 
@@ -19,7 +20,7 @@ V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Modul
 
 - TTS 节点提供 speak@1，接受动作并报告进度与终态；取消受理后等待真实输出停止。
 - WRS 节点通过 Environment 执行机器人动作，保留单一设备控制所有者与最终准入检查。
-- Voice 已是独立节点，当前接收已识别文本并分类。ASR 后端接入示例见 [文本合同](VOICE_INPUT.md)；当前还没有真实识别引擎。
+- Voice 已是独立节点，接收已识别文本并分类。可选的 ASR 节点持有麦克风与本地识别模型，按键控制起止，只把文字回给按住的调用者，停止则直接进 Voice 控制通道。两者的合同见 [文本合同](VOICE_INPUT.md)。
 - Agent 也是独立节点，包含 Runtime 和 Planner。Planner 先作为可替换的内部接口；只有独立 GPU、故障隔离或部署需求出现时再拆进程。
 
 可运行入口是 [自定义节点与 Skill](../examples/README.md#nodes)。新增后端主要修改处理函数和节点创建信息；新增受支持角色的实例主要修改配置与启动入口，Runtime 不增加对应分支。V1 不自动加载网络发现的代码。

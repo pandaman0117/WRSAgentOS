@@ -5,7 +5,14 @@ from pydantic import ValidationError
 from wrs_agent.schemas import ErrorInfo
 
 _MESSAGES = {
-    "glm_trust_env_invalid": "GLM_TRUST_ENV 应为 0/1 或 false/true；1 表示使用系统代理和证书配置。",
+    "glm_thinking_invalid": (
+        "GLM_THINKING 应为 off/low/high/max；留空则由账号模型自行决定思考深度。"
+        "off 关闭思考，GLM-5.3 不接受，该模型最省时的档位是 low。"
+    ),
+    "glm_http_400": (
+        "GLM 拒绝了请求参数。若与思考深度有关，请改用 GLM_THINKING=low："
+        "厂商文档称 GLM-5.3 系列不接受关闭思考，实际是否接受由服务端和端点决定。"
+    ),
     "glm_dns_error": "无法解析智谱服务域名。请检查 DNS、网络和代理设置。",
     "glm_tls_certificate_error": "HTTPS 证书校验失败。请检查系统时间、证书和 HTTPS 代理配置。",
     "glm_tls_error": "TLS 握手中断。请检查代理路由或 HTTPS 拦截配置。",
@@ -29,6 +36,8 @@ _MESSAGES = {
         "Set GLM_API_KEY to your API key without whitespace. "
         "If using .env, configure this IDE run configuration to load that file."
     ),
+    # unordered_resource_conflict 不在这张表里：它的正文要点名是哪两个步骤和哪个资源，
+    # 由 runtime.require_ordered_resources 就地构造，否则这里的通用句会盖掉那些名字。
     "provider_not_found": "No execution provider is configured for this skill.",
     "node_unavailable": "The configured node is offline.",
     "node_not_ready": "The node is present but not ready to accept actions.",
@@ -45,6 +54,9 @@ _MESSAGES = {
     "execution_unknown": "The submitted action's execution outcome cannot be confirmed.",
     "relative_target_unreachable": "No nearby joint-limit-valid IK solution for this offset.",
     "resource_busy": "The execution node is already running an action.",
+    "asr_busy": "This microphone is already capturing another push-to-talk session.",
+    "asr_press_finished": "This push-to-talk session already ended; start a new one.",
+    "asr_press_not_found": "No push-to-talk session is active with this ID.",
     "internal_error": "The operation failed inside the service.",
 }
 

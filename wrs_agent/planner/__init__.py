@@ -1,10 +1,12 @@
 """Planner input, decisions and model-backed implementation."""
 
+import time
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
 
-from wrs_agent.planner.providers import ModelClient, ModelRequest
+from wrs_agent.planner.providers import ModelClient, ModelRequest, ModelTiming
 from wrs_agent.schemas import Boundary, Plan
 
 
@@ -30,11 +32,29 @@ class Planner(Protocol):
     async def plan(self, request: PlanRequest) -> PlanDecision: ...
 
 
+@dataclass(frozen=True)
+class PlanTiming:
+    """Spans stay out of PlanDecision: a decision is model-supplied content, so the model
+    could otherwise report its own cost. Clients need not measure, hence an optional model."""
+
+    total: float
+    validate: float  # Local PlanDecision validation, after a complete reply.
+    model: ModelTiming | None
+
+
 class ModelPlanner:
     def __init__(self, client: ModelClient):
         self.client = client
+        self.last_timing = None
+        # Provider-reported counts, kept apart from the locally measured spans so that a
+        # number the model's own service supplied is never mistaken for one we observed.
+        self.last_usage = {}
 
     async def plan(self, request: PlanRequest) -> PlanDecision:
+        # Runtime plans one goal at a time; a failed call must not leave the previous spans.
+        self.last_timing = None
+        self.last_usage = {}
+        started = time.perf_counter()
         reply = await self.client.complete(
             ModelRequest(
                 goal=request.user_goal,
@@ -43,4 +63,9 @@ class ModelPlanner:
         )
         if reply.finish != "complete":
             raise ValueError("incomplete_model_reply")
-        return PlanDecision.model_validate_json(reply.text)
+        replied = time.perf_counter()
+        decision = PlanDecision.model_validate_json(reply.text)
+        done = time.perf_counter()
+        self.last_timing = PlanTiming(done - started, done - replied, reply.timing)
+        self.last_usage = reply.usage
+        return decision

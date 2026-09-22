@@ -10,6 +10,12 @@ from wrs_agent.errors import AgentError, error_info, from_exception
 from wrs_agent.schemas import Empty, ErrorInfo, NodeInfo, new_id
 from wrs_agent.skills import SKILLS, require_contract
 
+# Nodes without an ActionExecutor still declare what they contribute.
+INPUT_CAPABILITY = {
+    "agent": "task.coordinate",
+    "asr": "input.transcribe",
+}
+
 
 def register_node(bus, node_id, node_type, executor=None):
     boot_id = executor.boot_id if executor else new_id()
@@ -32,7 +38,7 @@ def register_node(bus, node_id, node_type, executor=None):
                 {c for entry in executor.skills.values() for c in entry.spec.required_capabilities}
             )
             if cap
-            else ["task.coordinate" if node_type == "agent" else "interaction.replay"],
+            else [INPUT_CAPABILITY.get(node_type, "interaction.replay")],
             resources=cap.resources if cap else [],
             error=None
             if ready

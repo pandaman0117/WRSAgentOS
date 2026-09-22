@@ -46,6 +46,11 @@ async def submit_text(system, text, captured, observing=False):
         print("收音期间控制权限变化，请重新说目标。", flush=True)
         return None
     overview = await system.status()
+    # UNKNOWN 算终态，却不表示已经确认：不知道动作有没有真的执行过。
+    # Runtime 在这个状态上拒收新目标，只有停止能解开，重说多少遍都一样。
+    if overview["state"] == "UNKNOWN":
+        print("上一次任务结果无法确认；先说“停止”，确认结束后再说新目标。", flush=True)
+        return None
     if observing or overview["planning"] == "WAITING" or (
         overview["task_id"] and overview["state"] not in TERMINAL
     ):

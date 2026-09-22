@@ -11,6 +11,8 @@ from wrs_agent.nodes.actions import ActionClient
 from wrs_agent.policy import text_intent
 from wrs_agent.registry import NodeRegistry
 from wrs_agent.schemas import (
+    AsrPress,
+    AsrResult,
     ControlRequest,
     Interaction,
     Plan,
@@ -115,6 +117,7 @@ class System:
         cls, *, backend="mock", duration=0.4, bindings=None, scene=None,
         port=0, site="local", env_id=None,
         tts_backend="mock", tts_python=None, tts_prepared_texts=(),
+        asr_backend="mock", asr_python=None, asr_script=(), asr_vocabulary=(),
     ):
         from wrs_agent.processes import LocalStack
 
@@ -124,6 +127,10 @@ class System:
             tts_backend=tts_backend,
             tts_python=tts_python,
             tts_prepared_texts=tts_prepared_texts,
+            asr_backend=asr_backend,
+            asr_python=asr_python,
+            asr_script=asr_script,
+            asr_vocabulary=asr_vocabulary,
             duration=duration,
             bindings=bindings,
             port=port,
@@ -136,14 +143,14 @@ class System:
         """Fresh node observations, queried directly, even if Agent is unavailable."""
         return await self.registry.refresh()
 
-    async def skills(self, query=""):
-        """Find skills available on ready nodes; this does not invoke Planner."""
+    async def skills(self):
+        """Skills available on ready nodes; this does not invoke Planner."""
         online = await self.nodes()
         names = [name for name in self.clients if online.get(name, {}).get("ready")]
         caps = await asyncio.gather(
             *(self.registry.capabilities(name, self.clients[name]) for name in names)
         )
-        return lookup_skills(query, dict(zip(names, caps, strict=True)), self.bindings)
+        return lookup_skills(dict(zip(names, caps, strict=True)), self.bindings)
 
     def task(self, task_id):
         """Reconnect to a task identity; status() reports task_not_found for unknown IDs."""
@@ -177,6 +184,28 @@ class System:
             timeout=5.0,
         )
         return TextReceipt.model_validate(raw)
+
+    async def listen_begin(self, press_id=None):
+        """Start one push-to-talk capture. The UI owns press and release, never a timer."""
+        press = AsrPress() if press_id is None else AsrPress(press_id=press_id)
+        raw = await self._transports[self._role("asr")].request(
+            "request/asr/begin", press.model_dump(), control=True
+        )
+        return AsrResult.model_validate(raw)
+
+    async def listen_end(self, press_id):
+        """Release the button. Recognition and routing to Voice continue on the ASR node."""
+        raw = await self._transports[self._role("asr")].request(
+            "request/asr/end", AsrPress(press_id=press_id).model_dump(), control=True
+        )
+        return AsrResult.model_validate(raw)
+
+    async def listen_result(self, press_id):
+        """Poll one capture; the transcript goes only to the caller that held the button."""
+        raw = await self._transports[self._role("asr")].request(
+            "request/asr/result", AsrPress(press_id=press_id).model_dump()
+        )
+        return AsrResult.model_validate(raw)
 
     async def goal(self, text):
         request_id = new_id()

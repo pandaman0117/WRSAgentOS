@@ -1,6 +1,6 @@
 # 技能库
 
-技能是系统会做的事情，例如抓取或播报。普通脚本用 `system.skills("播报")`
+技能是系统会做的事情，例如抓取或播报。普通脚本用 `system.skills()`
 查看当前可用技能，用 `system.action("speak", text="你好")` 提交一次动作。
 
 `__init__.py` 中的 `SKILLS` 是一张显式 Python 注册表。每项 `Skill` 把三件事放在一起：

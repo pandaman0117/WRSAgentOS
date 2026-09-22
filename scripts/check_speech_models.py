@@ -24,12 +24,48 @@ def main():
 
         model = QwenTTS()
         loaded = time.perf_counter() - started
-        for name, text in (("up", "向上。"), ("stop", "停止。")):
+        # Warm up before measuring; otherwise the first sample is charged for CUDA
+        # initialisation and hides the steady-state cost, as it did before this probe.
+        model.render("预热。", threading.Event())
+        samples = (
+            ("up", "向上。"),
+            ("stop", "停止。"),
+            # A long utterance of the kind the planner actually produces: only comparing it
+            # against the short ones separates per-call overhead from per-token decoding.
+            ("long", "当前机械臂六个关节角为：约0.00弧度、0.36弧度、0.49弧度、0.00弧度。"),
+        )
+        for name, text in samples:
+            span = {"steps": 0, "first": None, "last": None}
+
+            def count(module, inputs, span=span):
+                now = time.perf_counter()
+                if span["first"] is None:
+                    span["first"] = now
+                span["last"] = now
+                span["steps"] += 1
+
+            hook = model.model.model.talker.register_forward_pre_hook(count)
             started = time.perf_counter()
-            wave, rate = model.render(text, threading.Event())
-            elapsed = time.perf_counter() - started
+            try:
+                wave, rate = model.render(text, threading.Event())
+            finally:
+                hook.remove()
+            finished = time.perf_counter()
             sf.write(directory / f"{name}.wav", wave, rate)
-            results.append({"text": text, "seconds": elapsed, "audio_seconds": len(wave) / rate})
+            audio_seconds = len(wave) / rate
+            results.append({
+                "text": text,
+                "characters": len(text),
+                "seconds": finished - started,
+                "audio_seconds": audio_seconds,
+                "slower_than_realtime": (finished - started) / audio_seconds,
+                "talker_steps": span["steps"],
+                # Three spans that add up to the total: everything before the first talker
+                # forward, the decode loop itself, and turning audio tokens back to a waveform.
+                "before_decode": span["first"] - started,
+                "decode": span["last"] - span["first"],
+                "after_decode": finished - span["last"],
+            })
     else:
         import soundfile as sf
         from scipy.signal import resample_poly
