@@ -8,46 +8,54 @@ from wrs_agent.skills import SKILLS, Skill, SpeakArgs, SpeechState
 from wrs_agent.speech.assets import model_directory, offline_cuda
 
 
+# Eight decode steps are two thirds of a second of audio, so a stop request lands within
+# roughly a third of a second of wall time. Smaller chunks only add codec decode overhead.
+STOP_CHECK_STEPS = 8
+
+
 class QwenTTS:
     def __init__(self, *, speaker="Vivian"):
         directory = model_directory("tts")
         torch = offline_cuda()
-        from qwen_tts import Qwen3TTSModel
+        from faster_qwen3_tts import FasterQwen3TTS
 
-        self.model = Qwen3TTSModel.from_pretrained(
-            str(directory), device_map="cuda:0", dtype=torch.bfloat16,
+        self.model = FasterQwen3TTS.from_pretrained(
+            str(directory), device="cuda", dtype=torch.bfloat16,
             attn_implementation="sdpa", local_files_only=True,
         )
+        # Capturing the CUDA graphs belongs to load time, never to the first action.
+        self.model.warmup()
         self.speaker = speaker
 
     def render(self, text, stopped):
-        # qwen-tts 0.1.1 does not forward arbitrary stopping_criteria to its talker.
-        # The owner-only PyTorch hook checks between generation forwards instead.
-        class SynthesisStopped(Exception):
-            pass
-
-        def check_stop(module, inputs):
-            if stopped.is_set():
-                raise SynthesisStopped
-
-        hook = self.model.model.talker.register_forward_pre_hook(check_stop)
+        # Replaying a CUDA graph never calls Python forward hooks, so synthesis can only be
+        # interrupted between streamed chunks. Abandoning the generator is safe; the model
+        # still serves later requests. Playback joins the chunks.
+        chunks, rate = [], None
+        stream = self.model.generate_custom_voice_streaming(
+            text=text, speaker=self.speaker, language="Chinese",
+            max_new_tokens=2048, chunk_size=STOP_CHECK_STEPS,
+        )
         try:
-            waves, rate = self.model.generate_custom_voice(
-                text=text, language="Chinese", speaker=self.speaker, max_new_tokens=2048,
-            )
-            return None if stopped.is_set() else (waves[0], rate)
-        except SynthesisStopped:
-            return None
+            for audio, sample_rate, _ in stream:
+                if stopped.is_set():
+                    return None
+                chunks.append(audio)
+                rate = sample_rate
         finally:
-            hook.remove()
+            stream.close()
+        return None if stopped.is_set() or not chunks else (chunks, rate)
 
 
-def play_audio(audio, rate, stopped):
+def play_audio(chunks, rate, stopped):
     """Only the owner thread touches the stream; cancel aborts queued local output."""
     import numpy as np
     import sounddevice as sd
 
-    audio = np.asarray(audio, dtype="float32").reshape(-1, 1)
+    # Synthesis streams in chunks so that stop can land between them; join them here.
+    audio = np.concatenate(
+        [np.asarray(chunk, dtype="float32").reshape(-1) for chunk in chunks]
+    ).reshape(-1, 1)
     if not len(audio) or not np.isfinite(audio).all():
         raise SkillFailure("invalid_synthesized_audio")
     stream = None

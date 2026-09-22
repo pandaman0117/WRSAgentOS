@@ -14,7 +14,12 @@ from conftest import action, control, eventually
 from wrs_agent.actions import ExecutionUnknown
 from wrs_agent.schemas import ActionState
 from wrs_agent.speech import assets
-from wrs_agent.speech.tts import QwenTTS, SpeechBackend, make_speech_executor
+from wrs_agent.speech.tts import (
+    STOP_CHECK_STEPS,
+    QwenTTS,
+    SpeechBackend,
+    make_speech_executor,
+)
 
 
 async def test_cancel_during_synthesis_does_not_play_late_audio(tmp_path):
@@ -113,31 +118,52 @@ async def test_prepared_speech_skips_inference_and_preserves_idempotence(tmp_pat
         await env.close()
 
 
-def test_qwen_stop_hook_is_removed_on_cancel_and_failure():
-    hooks = []
-    removed = []
+def test_qwen_stop_lands_between_chunks_and_always_closes_the_stream():
+    """CUDA graph replay skips Python forward hooks, so chunk boundaries are the only
+    place synthesis can be interrupted."""
+    produced, closed = [], []
 
-    def register(hook):
-        hooks.append(hook)
-        return SimpleNamespace(remove=lambda: removed.append(True))
-
-    def generate(**kwargs):
-        hooks[-1](None, None)
-        raise ValueError("inference failed")
+    def stream(**kwargs):
+        assert kwargs["chunk_size"] == STOP_CHECK_STEPS
+        try:
+            for index in range(4):
+                produced.append(index)
+                yield [0.1 * index], 24000, {"chunk_index": index}
+        finally:
+            closed.append(True)
 
     renderer = QwenTTS.__new__(QwenTTS)
     renderer.speaker = "Vivian"
-    renderer.model = SimpleNamespace(
-        model=SimpleNamespace(talker=SimpleNamespace(register_forward_pre_hook=register)),
-        generate_custom_voice=generate,
-    )
+    renderer.model = SimpleNamespace(generate_custom_voice_streaming=stream)
+
     stop = threading.Event()
     stop.set()
     assert renderer.render("你好", stop) is None
+    # Stopped at the first boundary instead of draining the whole utterance.
+    assert produced == [0] and closed == [True]
+
     stop.clear()
+    chunks, rate = renderer.render("你好", stop)
+    assert rate == 24000 and chunks == [[0.0], [0.1], [0.2], [0.30000000000000004]]
+    assert produced == [0, 0, 1, 2, 3] and closed == [True, True]
+
+
+def test_qwen_render_propagates_synthesis_failure_and_closes_the_stream():
+    closed = []
+
+    def stream(**kwargs):
+        try:
+            yield [0.5], 24000, {"chunk_index": 0}
+            raise ValueError("inference failed")
+        finally:
+            closed.append(True)
+
+    renderer = QwenTTS.__new__(QwenTTS)
+    renderer.speaker = "Vivian"
+    renderer.model = SimpleNamespace(generate_custom_voice_streaming=stream)
     with pytest.raises(ValueError, match="inference failed"):
-        renderer.render("你好", stop)
-    assert removed == [True, True]
+        renderer.render("你好", threading.Event())
+    assert closed == [True]
 
 
 @pytest.mark.parametrize("kind", ["sha256", "git_sha1"])
@@ -303,6 +329,7 @@ def test_audio_device_errors_never_look_like_confirmed_success(monkeypatch, fail
 
     monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(
         asarray=lambda *a, **k: Samples(),
+        concatenate=lambda parts: Samples(),
         isfinite=lambda a: SimpleNamespace(all=lambda: True),
     ))
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream))
