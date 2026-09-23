@@ -17,6 +17,8 @@ from wrs_agent.schemas import (
     ControlRequest,
     Empty,
     IdRequest,
+    ModeReceipt,
+    ModeRequest,
     NodeSnapshot,
     new_id,
 )
@@ -76,9 +78,11 @@ class ActionClient:
     def __init__(self, transport, *, node_id=None):
         self.transport, self.node_id = transport, node_id
 
-    async def _query(self, suffix, payload, response, *, stage, optional=False, control=False):
+    async def _query(
+        self, suffix, payload, response, *, stage, optional=False, control=False, timeout=2.0
+    ):
         try:
-            raw = await self.transport.request(suffix, payload, control=control)
+            raw = await self.transport.request(suffix, payload, control=control, timeout=timeout)
         except Exception as exc:
             raise AgentError(from_exception(exc, node_id=self.node_id, stage=stage)) from None
         if raw is None and optional:
@@ -188,6 +192,12 @@ class ActionClient:
 
     async def cancel(self, request):
         return await self.control("cancel", request)
+
+    async def set_mode(self, request: ModeRequest):
+        # Normal inbox: connecting takes seconds and must not queue behind or block stops.
+        return await self._query(
+            "request/robot/mode", request.model_dump(), ModeReceipt, stage="control", timeout=20.0
+        )
 
 
 def register_actions(transport, executor):

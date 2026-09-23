@@ -149,6 +149,23 @@ class ControlReceipt(Boundary):
     error: ErrorInfo | None = None
 
 
+class ModeRequest(Boundary):
+    """Choose whether the robot node drives its model only or the real device."""
+
+    interrupt_id: Name
+    boot_id: Name
+    control_epoch: Counter
+    mode: Literal["virtual", "real"]
+
+
+class ModeReceipt(Boundary):
+    accepted: bool
+    reason: str = ""
+    mode: Literal["virtual", "real"]
+    control_epoch: Counter
+    error: ErrorInfo | None = None
+
+
 class KinematicState(Boundary):
     """WRS joint values and the named TCP pose, expressed in frame_id."""
 
@@ -263,7 +280,7 @@ class CapabilitySnapshot(Boundary):
     resources: list[Name] = Field(default_factory=list)
     skills: dict[Name, SkillVersion] = Field(max_length=64)
     robot_controls: bool = True
-    hardware: Literal[False] = False
+    hardware: bool = False  # Can drive a real device; SceneData.facts says whether it does now.
     controlled_stop: bool = True
     controller_flush: bool = True
     verification: Name = "virtual_state"

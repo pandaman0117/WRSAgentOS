@@ -157,6 +157,30 @@ class VirtualModel:
             self.robot.fk(self.path[index])
         return self.read()
 
+    def sync(self, qs, width=None):
+        """Mirror a measured robot; the model then plans from where the robot really is."""
+        self.robot.fk(self.wrs.np.asarray(qs, dtype=self.wrs.np.float32))
+        if width is not None:
+            low, high = (float(v) for v in self.gripper.jaw_range)
+            self.gripper.set_opening(min(max(float(width), low), high))
+        return self.read()
+
+    def target(self):
+        return self.goal.tolist(), self.goal_width
+
+    def verify_measured(self, joint_tolerance=0.01, position_tolerance=0.003):
+        """Postcondition on synced measurements; real joints never match a goal exactly."""
+        np = self.wrs.np
+        return bool(
+            np.isfinite(self.robot.gl_lnk_tfarr).all()
+            and np.max(np.abs(self.robot.qs - self.goal)) <= joint_tolerance
+            and (
+                self.goal_tcp_tf is None
+                or np.linalg.norm(self.tcp.tf[:3, 3] - self.goal_tcp_tf[:3, 3])
+                <= position_tolerance
+            )
+        )
+
     def verify(self):
         # Read the model, not a timer or a commanded pose label.
         before = self.robot.gl_lnk_tfarr.copy()
@@ -179,20 +203,27 @@ class VirtualState:
         self.kinematics = kinematics
         self.objects = objects or {}
         self.pose = "home"
+        self.facts = {}  # Backend-owned extras, e.g. which device the model mirrors.
 
     def snapshot(self):
         return SceneData(
             robot=RobotData(pose=self.pose, kinematics=self.kinematics),
             objects={name: obj.model_copy(deep=True) for name, obj in self.objects.items()},
-            facts={"calibration": "wrs2-ur7e-dh50-v1", "collision_checked": False},
+            facts={"calibration": "wrs2-ur7e-dh50-v1", "collision_checked": False, **self.facts},
         )
 
 
-async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_hardware=False):
-    if allow_hardware:
-        raise ValueError("hardware_unsupported")
-    if not 0 < duration <= 30:
-        raise ValueError("invalid_duration")
+ROBOT_SKILLS = ("observe", "move_named_pose", "move_relative", "set_gripper")
+UNSUPPORTED = {
+    "pick": "DH50 jaw is modeled, but there is no validated grasp/contact scene.",
+    "place": "No verified held-object/contact state.",
+    "verify": "Object placement verifier requires a grasp scene.",
+    "collision_planning": "No collision-checked path in this kinematic profile.",
+}
+
+
+async def open_model(scene=None):
+    """One WRS model on its own owner thread; returns (call, model, state, close)."""
     objects = await asyncio.to_thread(load_scene, scene) if scene is not None else {}
     owner = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wrs-model")
     loop = asyncio.get_running_loop()
@@ -210,58 +241,70 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
         owner.shutdown(wait=False)
         raise
 
-    async def advance(skill, state, args, stop, progress):
-        try:
-            if skill == "observe":
-                state.kinematics = await call(model.read)
-                state.version += 1
-                return state.kinematics["valid"]
-            count = max(2, round(duration / 0.02) + 1)
-            if skill == "move_relative":
-                await call(model.begin_relative, (args.dx, args.dy, args.dz), count)
-            elif skill == "set_gripper":
-                await call(model.begin_gripper, args.command, count)
-            else:
-                await call(model.begin, args.pose, count)
-            for index in range(1, count):
-                if stop.is_set():
-                    return False
-                if skill != "set_gripper":
-                    state.pose = None
-                # One in-flight FK only. No model object is read by the control thread.
-                state.kinematics = await call(model.step, index)
-                state.version += 1
-                if stop.is_set():
-                    return False
-                progress(index / (count - 1))
-                try:
-                    await asyncio.wait_for(stop.wait(), duration / (count - 1))
-                except TimeoutError:
-                    pass
-            if stop.is_set():
-                return False
-            verified = await call(model.verify)
-            if not stop.is_set() and verified and skill == "move_named_pose":
-                state.pose = args.pose
-            return verified
-        except SkillFailure:
-            # An unreachable target has caused no model update.
-            raise
-        except Exception:
-            state.kinematics = {**state.kinematics, "valid": False}
-            # A model update may have happened; no blind allow_actions or retry.
-            raise ExecutionUnknown("wrs_model_state_unknown") from None
-
     async def close():
         await asyncio.to_thread(owner.shutdown, wait=True)
 
-    executor = ActionExecutor(
+    return call, model, state, close
+
+
+async def advance_virtual(call, model, duration, skill, state, args, stop, progress):
+    try:
+        if skill == "observe":
+            state.kinematics = await call(model.read)
+            state.version += 1
+            return state.kinematics["valid"]
+        count = max(2, round(duration / 0.02) + 1)
+        if skill == "move_relative":
+            await call(model.begin_relative, (args.dx, args.dy, args.dz), count)
+        elif skill == "set_gripper":
+            await call(model.begin_gripper, args.command, count)
+        else:
+            await call(model.begin, args.pose, count)
+        for index in range(1, count):
+            if stop.is_set():
+                return False
+            if skill != "set_gripper":
+                state.pose = None
+            # One in-flight FK only. No model object is read by the control thread.
+            state.kinematics = await call(model.step, index)
+            state.version += 1
+            if stop.is_set():
+                return False
+            progress(index / (count - 1))
+            try:
+                await asyncio.wait_for(stop.wait(), duration / (count - 1))
+            except TimeoutError:
+                pass
+        if stop.is_set():
+            return False
+        verified = await call(model.verify)
+        if not stop.is_set() and verified and skill == "move_named_pose":
+            state.pose = args.pose
+        return verified
+    except SkillFailure:
+        # An unreachable target has caused no model update.
+        raise
+    except Exception:
+        state.kinematics = {**state.kinematics, "valid": False}
+        # A model update may have happened; no blind allow_actions or retry.
+        raise ExecutionUnknown("wrs_model_state_unknown") from None
+
+
+async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_hardware=False):
+    if allow_hardware:
+        raise ValueError("hardware_unsupported")
+    if not 0 < duration <= 30:
+        raise ValueError("invalid_duration")
+    call, model, state, close = await open_model(scene)
+    return ActionExecutor(
         journal_path,
         state=state,
         close_backend=close,
         skills={
-            name: replace(SKILLS[name], handler=partial(advance, name))
-            for name in ("observe", "move_named_pose", "move_relative", "set_gripper")
+            name: replace(
+                SKILLS[name], handler=partial(advance_virtual, call, model, duration, name)
+            )
+            for name in ROBOT_SKILLS
         },
         duration=0,  # This backend advances itself; no Mock delay before motion.
         backend="wrs",
@@ -270,15 +313,11 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
             "stop_scope": "virtual_fk_boundary",
             "controller_flush": False,
             "unsupported": {
-                "pick": "DH50 jaw is modeled, but there is no validated grasp/contact scene.",
-                "place": "No verified held-object/contact state.",
-                "verify": "Object placement verifier requires a grasp scene.",
-                "hardware": "No verified controller stop/flush/state feedback.",
-                "collision_planning": "No collision-checked path in this kinematic profile.",
+                **UNSUPPORTED,
+                "hardware": "Virtual profile; the ur_rtde backend drives the real UR7e.",
             },
         },
     )
-    return executor
 
 
 def probe_virtual():

@@ -78,6 +78,12 @@ _MESSAGES = {
     "execution_unknown": "The submitted action's execution outcome cannot be confirmed.",
     "relative_target_unreachable": "No nearby joint-limit-valid IK solution for this offset.",
     "resource_busy": "The execution node is already running an action.",
+    "hardware_not_enabled": "节点启动时未允许实机（--allow-hardware），不能切换到实机。",
+    "mode_switch_not_ready": "切换前机器人必须空闲、停止已确认，且状态不是 UNKNOWN。",
+    "mode_switch_busy": "上一次虚拟/实机切换尚未完成。",
+    "hardware_connect_failed": (
+        "连接 UR 控制器或夹爪失败：检查网络、示教器远程控制模式和串口；节点保持虚拟模式。"
+    ),
     "asr_busy": "This microphone is already capturing another push-to-talk session.",
     "asr_press_finished": "This push-to-talk session already ended; start a new one.",
     "asr_press_not_found": "No push-to-talk session is active with this ID.",
