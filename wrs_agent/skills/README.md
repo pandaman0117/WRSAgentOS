@@ -36,7 +36,7 @@ Planner 只提出计划，Runtime 和执行节点仍检查原有结构化契约�
 未注册的函数；缺少实现仍拒绝。Planner 只接收注册项的 spec（含说明和参数），不会接收函数。
 技能描述只说明会做什么；TOML 是执行节点绑定的唯一来源，没有隐含的默认节点。
 说明书只解释使用方法，不能重复定义一套不同的权限或参数规则。
-当前 WRS FK 节点只支持观察和命名姿态；抓取/放置只在 Mock 验证。
+当前 WRS FK 节点支持观察、命名姿态、相对移动和 DH50 夹爪开合（`set_gripper`）；抓取/放置只在 Mock 验证。
 
 格式参考：https://agentskills.io/specification 。本地参考来源和已知限制见
 项目根目录的 `docs/api_simplification.md`；没有复制 HoloAgent 的控制脚本。

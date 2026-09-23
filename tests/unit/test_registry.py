@@ -146,12 +146,12 @@ async def test_duplicate_instances_and_descriptor_leave_race_fail_closed():
 
 
 def test_bindings_allow_named_providers_but_not_duplicate_action_endpoints(tmp_path):
-    text = DEFAULT.read_text(encoding="utf-8").replace("nodes.wrs", "nodes.wrs_lite6")
-    text = text.replace('= "wrs"', '= "wrs_lite6"').replace('type = "wrs_lite6"', 'type = "wrs"')
+    text = DEFAULT.read_text(encoding="utf-8").replace("nodes.wrs", "nodes.wrs_ur7e")
+    text = text.replace('= "wrs"', '= "wrs_ur7e"').replace('type = "wrs_ur7e"', 'type = "wrs"')
     path = tmp_path / "bindings.toml"
     path.write_text(text, encoding="utf-8")
     nodes, bindings = load_bindings(path)
-    assert bindings["pick"] == "wrs_lite6" and nodes["wrs_lite6"]["type"] == "wrs"
+    assert bindings["pick"] == "wrs_ur7e" and nodes["wrs_ur7e"]["type"] == "wrs"
     path.write_text(text.replace('suffix = "-tts"', 'suffix = ""'), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate_execution_endpoint"):
         load_bindings(path)

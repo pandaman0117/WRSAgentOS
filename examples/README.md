@@ -31,7 +31,7 @@
 
 任务结果可用 `TaskState.SUCCEEDED` 等枚举成员判断，动作和规划结果分别使用 `ActionState`、`GoalState`；打印仍显示原字符串。取消示例演示这种写法，完整约定见 [状态枚举](../docs/task_handles.md#state-的字符串枚举)。
 
-`after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。机器人动作由实际 WRS 模型执行。tasks/05 和 voice/04 使用确定的 home 规划模板，只教学规划句柄；在线 GLM 见 models。这一组控制语义例子中的 TTS 为 Mock，不产生声音；真实 Qwen 播报见 [tts](tts/README.md)。
+`after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。机器人动作由实际 WRS 模型执行。tasks/05 和 voice/04 使用确定的 home 规划模板，只教学规划句柄；在线模型见 models。这一组控制语义例子中的 TTS 为 Mock，不产生声音；真实 Qwen 播报见 [tts](tts/README.md)。
 
 ## 语音入口
 
@@ -48,7 +48,7 @@
 
 | 文件 | 只展示什么 |
 |---|---|
-| [01_move.py](wrs/01_move.py) | Lite6 虚拟运动到 B，读取关节值 qs 和 TCP 位置 |
+| [01_move.py](wrs/01_move.py) | UR7E 虚拟运动到 B，读取关节值 qs 和 TCP 位置 |
 | [02_cancel.py](wrs/02_cancel.py) | 取消虚拟运动并查询停止确认 |
 | [03_new_action_after_cancel.py](wrs/03_new_action_after_cancel.py) | 确认取消后开放新动作准入，再回 home |
 | [04_move_relative.py](wrs/04_move_relative.py) | 用真实 IK/FK 上、下、左、右各走 2 cm |
@@ -56,7 +56,7 @@
 | [06_control_arm.py](wrs/06_control_arm.py) | 另一进程提交方向移动任务 |
 | [07_viewer.py](wrs/07_viewer.py) | 只读显示节点模型，浏览器查看 |
 
-需要已准备好的 WRS 科学依赖。使用真实 WRS Lite6 模型的 IK/FK 运动，不连接硬件；没有验证真实抓放或碰撞规划。普通任务取消会收尾，直接机器人动作取消则需要显式 `allow_actions()`；它只允许新动作，不续跑旧动作。
+需要已准备好的 WRS 科学依赖。使用真实 WRS UR7E 模型的 IK/FK 运动，不连接硬件；没有验证真实抓放或碰撞规划。普通任务取消会收尾，直接机器人动作取消则需要显式 `allow_actions()`；它只允许新动作，不续跑旧动作。
 
 本机直接依次运行下面三个示例。服务会自动生成本组随机口令，客户端和 viewer 从同一仓库读取，不需要手动配置 `WRS_AGENT_TOKEN`；详见[示例口令](#example-token)。
 
@@ -69,11 +69,11 @@
 ./scripts/run.ps1 examples/wrs/06_control_arm.py
 ```
 
-`move_relative(dx=..., dy=..., dz=...)` 使用世界坐标系，单位米；上/下是 ±Z，左/右是 ±Y，前/后是 ±X，和浏览器视角无关。每次最多 5 cm、不可为零。TCP 目标朝向保持不变，运动路径是关节插值，不是碰撞规划或笛卡尔直线规划。不可达时动作 FAILED，原因是 `relative_target_unreachable`，不会伪造成功。
+`move_relative(dx=..., dy=..., dz=...)` 使用世界坐标系，单位米；上/下是 ±Z，左/右是 ±Y，前/后是 ±X，和浏览器视角无关。每次最多 10 cm、不可为零。TCP 目标朝向保持不变，运动路径是关节插值，不是碰撞规划或笛卡尔直线规划。不可达时动作 FAILED，原因是 `relative_target_unreachable`，不会伪造成功。
 
 节点保留去重日志；重启后可能显示 HELD。方向控制客户端先查询停止确认，再显式调用 `allow_actions()` 开放新动作准入；UNKNOWN 不会被自动解除，旧任务不会恢复。
 
-`07_viewer.py` 直接展示 WRS World、Lite6、坐标轴的创建，以及 `snapshot()` → `robot.fk()` → 定时刷新的完整过程。页面服务的生命周期由 `viewer_hub` 管理；场景和刷新代码就在示例内。它读取执行节点的真实关节状态，不执行运动。退出 viewer/控制客户端不取消任务，也不关闭节点。viewer 退出会关闭自己拥有的回环页面服务；运行中的其他 8000 端口服务不会被接管。浏览器需支持 WebGPU。节点重启后需重新连接 viewer，避免把旧会话显示成仍然在线。
+`07_viewer.py` 直接展示 WRS World、UR7E、坐标轴的创建，以及 `snapshot()` → `robot.fk()` → 定时刷新的完整过程。页面服务的生命周期由 `viewer_hub` 管理；场景和刷新代码就在示例内。它读取执行节点的真实关节状态，不执行运动。退出 viewer/控制客户端不取消任务，也不关闭节点。viewer 退出会关闭自己拥有的回环页面服务；运行中的其他 8000 端口服务不会被接管。浏览器需支持 WebGPU。节点重启后需重新连接 viewer，避免把旧会话显示成仍然在线。
 
 ## connect
 
@@ -148,12 +148,12 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 
 | 文件 | 只展示什么 |
 |---|---|
-| [01_plan.py](models/01_plan.py) | 读取 WRS 当前状态和技能，在线 GLM 提出计划，不执行 |
-| [02_execute.py](models/02_execute.py) | 在线 GLM → Planner → Runtime → 独立 WRS 节点执行 |
+| [01_plan.py](models/01_plan.py) | 读取 WRS 当前状态和技能，在线模型提出计划，不执行 |
+| [02_execute.py](models/02_execute.py) | 在线模型 → Planner → Runtime → 独立 WRS 节点执行 |
 
-在运行脚本的终端或 IDE 中设置 `GLM_API_KEY`、`GLM_MODEL`、`GLM_BASE_URL`。key 仅从环境读取，不要写进代码或提交；`.env` 不自动加载。模型名称与端点须符合账号权限，可用端点格式见 [.env.example](../.env.example)。两份脚本直接在线执行，可能产生服务费用，没有离线回退或额外代码开关。
+所有厂商共用一组变量：`LLM_PROTOCOL` 选线协议（`openai_chat`/`openai_responses`/`anthropic_messages`），`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` 选端点、模型和凭据。GLM、DeepSeek、Qwen、Gemini、vLLM、Ollama 等 OpenAI 兼容服务用 `openai_chat`，OpenAI 官方用 `openai_responses`，Claude 用 `anthropic_messages`；各厂商地址见 [.env.example](../.env.example)。key 仅从环境读取，不要写进代码或提交；`.env` 不自动加载。两份脚本直接在线执行，可能产生服务费用，没有离线回退或额外代码开关。
 
-`GLM_MODEL` 必填：API Key 用于身份验证，Base URL 指定服务地址，它们不会自动选择模型。请在 `.env` 中增加 `GLM_MODEL=账号可用的模型ID`（替换等号后的占位文字），并在 PyCharm 的 `01_plan`、`02_execute` 运行配置中选择该 `.env` 文件。配置缺失或非法时，示例在启动节点和创建 HTTP 客户端之前明确提示对应变量。
+`LLM_MODEL` 与 `LLM_BASE_URL` 必填：API Key 只做身份验证，不会选择模型，本项目也不假定默认厂商。请在 `.env` 中填写后，在 PyCharm 的 `01_plan`、`02_execute` 运行配置中选择该 `.env` 文件。配置缺失或非法时，示例在启动节点和创建 HTTP 客户端之前明确提示对应变量。旧版 `GLM_API_KEY`/`GLM_MODEL`/`GLM_BASE_URL` 分别改名为 `LLM_API_KEY`/`LLM_MODEL`/`LLM_BASE_URL`，再加 `LLM_PROTOCOL=openai_chat`。
 
 ```powershell
 ./scripts/run.ps1 examples/models/01_plan.py
@@ -177,7 +177,7 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 
 ## 示例口令
 
-`WRS_AGENT_TOKEN` 是本项目对服务请求做校验的共享口令。客户端发送请求时带上它，服务端核对是否匹配；它与 WRS 库和 GLM API Key 无关。`"wrs"` 只是 05/06/07 这组示例的口令文件分组名。这里保留简单的请求鉴权，示例自动处理口令的生成和读取。
+`WRS_AGENT_TOKEN` 是本项目对服务请求做校验的共享口令。客户端发送请求时带上它，服务端核对是否匹配；它与 WRS 库和模型的 `LLM_API_KEY` 无关。`"wrs"` 只是 05/06/07 这组示例的口令文件分组名。这里保留简单的请求鉴权，示例自动处理口令的生成和读取。
 
 启动脚本在 `if __name__ == "__main__"` 中普通调用 `use_local_token(...)`，随后才 `asyncio.run(main())`。这项一次性的启动配置不需要线程切换，也不放进异步业务主流程；直接导入示例不会生成文件。
 
@@ -191,32 +191,34 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
-将输出填入各进程相同的 `WRS_AGENT_TOKEN`，或写入不提交的 `.env` 并让各 IDE 运行配置加载该文件。它与智谱的 `GLM_API_KEY`、`GLM_MODEL` 无关。
+将输出填入各进程相同的 `WRS_AGENT_TOKEN`，或写入不提交的 `.env` 并让各 IDE 运行配置加载该文件。它与模型的 `LLM_API_KEY`、`LLM_MODEL` 无关。
 
 更换自动口令时，先关闭该组全部服务/客户端，删除对应 `.local/example_tokens/<组名>.token`，再启动服务；运行中的进程不会自动重载口令。首次先启动客户端会提示对应服务入口；缓存文件已存在但服务没启动时，仍需先启动服务。
 
-## GLM 网络排查
+## 模型网络排查
 
-`GLM_API_KEY`、`GLM_MODEL` 配置正确后仍可能遇到网络错误。示例会区分 DNS、TCP 连接、代理、TLS/证书和超时；只输出静态说明，不回显异常原文、请求头或代理凭据。
+`LLM_*` 配置正确后仍可能遇到网络错误。示例会区分 DNS、TCP 连接、代理、TLS/证书和超时；只输出静态说明，不回显异常原文、请求头或代理凭据。
 
-先运行不读取 Key、不提交模型请求、不启动机器人的连通性检查：
+先运行不读取 Key、不提交模型请求、不启动机器人的连通性检查（读取 `LLM_BASE_URL` 和 `LLM_PROXY`）：
 ```powershell
-./scripts/run.ps1 scripts/check_glm_connection.py
+./scripts/run.ps1 scripts/check_llm_connection.py
 ```
 收到 401/404 等 HTTP 状态也说明该次网络连接成功，不代表 Key/模型权限已验证。TLS 握手失败或 DNS 错误发生在收到 HTTP 响应之前，不能据此判断 Key 是否正确。
 
-模型客户端始终直连：不读取 `HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 等环境变量，环境里配置的代理不会静默承载机器人规划请求。本项目不会自动改变系统 DNS/代理、关闭 TLS 校验或切换计费端点。
+模型客户端默认直连：不读取 `HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 等环境变量，环境里配置的代理不会静默承载机器人规划请求。需要代理访问海外服务时，显式设置 `LLM_PROXY=http://127.0.0.1:端口`。本项目不会自动改变系统 DNS/代理、关闭 TLS 校验或切换计费端点。
 
-`GLM_THINKING` 可选，取值 `off`/`low`/`high`/`max`，留空则由账号模型自行决定。`off` 发送 `thinking.type=disabled`，其余三档发送 `thinking.type=enabled` 加对应的 `reasoning_effort`。思考越少等待越短、推理也越少；Runtime 仍会校验每个计划，退化的是计划质量而非它的边界。
+`LLM_REASONING_EFFORT` 可选，取值 `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`，留空则不发送、由服务端默认。取值原样写进各协议自己的字段：Chat 的 `reasoning_effort`、Responses 的 `reasoning.effort`、Claude 的 `output_config.effort`（Claude 没有 `none` 档，`none` 改为发送 `thinking.type=disabled`）。思考越少等待越短、推理也越少；Runtime 仍会校验每个计划，退化的是计划质量而非它的边界。
 
-各档位被哪些模型接受由服务端决定，本项目不按模型名改写取值。厂商文档称 GLM-5.3 系列不接受 `off`（返回 HTTP 400、错误码 1210），但本仓库在 Coding Plan 端点上实测 `glm-5.3-flash` 接受了 `off` 且明显更快，因此以实测为准、遇到 400 再改 `low`。`reasoning_effort` 仅 GLM-5.2 及以上读取，更早的模型会忽略它。Coding Plan 端点对各档位的映射与标准 API 文档不同，换模型后需实测确认。
+各档位被哪些模型接受由服务端决定，本项目不按模型名改写取值；遇到 HTTP 400 先清空该项。厂商私有开关放进 `LLM_EXTRA_BODY`（JSON 对象，只能新增字段，不能覆盖适配器生成的字段）。旧版 `GLM_THINKING=low/high/max` 改为 `LLM_REASONING_EFFORT` 同值；`GLM_THINKING=off` 改为 `LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}`。厂商文档称 GLM-5.3 系列不接受关闭思考（HTTP 400、错误码 1210），但本仓库在 Coding Plan 端点上实测 `glm-5.3-flash` 接受了关闭且明显更快，因此以实测为准、遇到 400 再改 `LLM_REASONING_EFFORT=low`。Coding Plan 端点对各档位的映射与标准 API 文档不同，换模型后需实测确认。
+
+`LLM_TOOL_CHOICE` 可选 `auto`（默认）或 `required`。`auto` 下部分模型会把计划 JSON 写进回复正文；正文永远只按回答处理，所以规划结果显示 ANSWER、不会执行。`required` 强制每次调用 `propose_plan`，回答和澄清仍以 `kind=answer`/`clarify` 返回，不丢功能。实测 DashScope 的 `qwen3.8-flash`（思考关闭）在 `auto` 下 12 次有 4 次写成正文，`required` 下 12 次全部是工具调用。智谱文档称 GLM 只支持 `auto`；Claude 开启思考时不接受强制工具，这两种情况保持默认。
 
 ## 中文语音与独立播报
 
 | 目录 | 从哪里开始 |
 |---|---|
 | [wrs](wrs/README.md) | 运动、停止、场景快照和 WRS 显示，01–08 |
-| [voice](voice/README.md) | 文字控制 01–04；本地按键语音 05–06；在线 GLM 循环语音 07–09 |
+| [voice](voice/README.md) | 文字控制 01–04；本地按键语音 05–06；在线模型循环语音 07–09 |
 | [tts](tts/README.md) | 01 启动并播报预热；02 说话；03 取消合成/播放 |
 
 原 wrs/08、09 移至 [voice/05](voice/05_start_wrs_voice.py)、[voice/06](voice/06_push_to_talk.py)，配合 [wrs/07_viewer.py](wrs/07_viewer.py)。在线语音采用另一地址与自己的 viewer，避免误连本地规划模板。安装和下载见 [Qwen 指南](../docs/QWEN_SPEECH.md)。自动验收不会启动麦克风、扬声器或付费模型。

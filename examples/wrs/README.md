@@ -1,6 +1,6 @@
 # WRS：运动、停止与显示
 
-这里仅放 WRS 本身的例子，全部连接固定 WRS 后端，在 Lite6 模型中执行 IK/FK；不控制实机。
+这里仅放 WRS 本身的例子，全部连接固定 WRS 后端，在 UR7E 模型中执行 IK/FK；不控制实机。
 
 | 文件 | 内容 |
 |---|---|
@@ -36,4 +36,4 @@ snapshot().data 是 SceneData：robot.kinematics 为关节/TCP，objects[id] 包
 
 这是静态仿真场景，尚未增加在线视觉更新或碰撞规划，WRS pick/place 仍不支持。完整字段和后续并行节点设计见 [场景说明](../../docs/SCENE_AND_PERCEPTION.md)。
 
-原 08/09 语音例子已移到 [voice/05](../voice/05_start_wrs_voice.py) 和 [voice/06](../voice/06_push_to_talk.py)。语音操作也可以使用这里的 07 显示，但 WRS/05 与 Voice/05 不要同时启动。在线 GLM 的常驻语音是另一组独立地址，见 [Voice 示例](../voice/README.md)。
+原 08/09 语音例子已移到 [voice/05](../voice/05_start_wrs_voice.py) 和 [voice/06](../voice/06_push_to_talk.py)。语音操作也可以使用这里的 07 显示，但 WRS/05 与 Voice/05 不要同时启动。在线模型的常驻语音是另一组独立地址，见 [Voice 示例](../voice/README.md)。

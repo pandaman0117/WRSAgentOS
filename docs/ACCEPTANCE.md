@@ -660,3 +660,64 @@ Ruff、doctor WRS probe、git diff --check、示例目录与 123 条本地文档
 Ruff、uv lock --check --offline、当前本地文档链接、示例目录和暂存区 diff --check 通过；清理 viewer.py 末尾空白。扫描候选文件及既有未推送历史，未发现私钥/常见令牌模式；.env、本机口令、虚拟环境、模型权重、录音和 reports 保持忽略。第三方 WRS submodule 保持原提交且干净。模型缓存、ASR 环境安装与音频验证限制仍按各专题记录，不把软件回归替代真实设备验收。
 
 证据 reports/publish_unit.xml、publish_integration.xml、publish_final_regression.xml、publish_race_before.xml、publish_examples.json、publish_lint_final.txt、publish_lock.txt、publish_scan.json；不上传本机生成的 reports。
+
+
+## 2026-09-23：Planner 模型按线协议通用化
+
+GLM 专用适配（`providers/glm.py`、`GLM_*`、`glm_*` 错误码、`--model-provider glm`、extra `glm`）替换为按线协议选择的通用适配：`LLM_PROTOCOL` ∈ openai_chat / openai_responses / anthropic_messages，其余为 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` 与可选的 `LLM_REASONING_EFFORT`、`LLM_MAX_TOKENS`、`LLM_TIMEOUT_S`、`LLM_EXTRA_BODY`、`LLM_EXTRA_HEADERS`、`LLM_PROXY`。设计依据与拒绝项见 SOURCES.md S24，模块分层与扩展方式见 DEVELOPMENT.md。原 GLM 路径的安全性质逐项保留并对三种协议都有测试：显式 live opt-in、只读环境凭据、不跟随重定向、不重试已发送请求、整请求超时与取消、64 KiB 回复上限、错误不回显正文/URL/凭据、环境代理不生效、最多一个提案、散文只作回答、未完成/拒答不成为决定。
+
+与原行为的有意变化：端点不再限定为两个智谱地址，改为必须显式设置并满足 https（明文仅限回环）、无账号/查询/片段；回环本地服务可不带 key；新增显式 `LLM_PROXY`；推理深度原样写入各协议字段，GLM 不再额外发送 `thinking.type=enabled`（厂商文档称 GLM-5.x 默认开启思考），原 `GLM_THINKING=off` 改为 `LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}`；模型 ID 允许 `: / @ +`。
+
+验证命令（仓库根目录，`WRS_AGENT_PYTHON=D:\code\venv312\.venv\Scripts\python.exe`）：
+~~~text
+./scripts/run.ps1 scripts/verify.py
+.local/tools/bin/uv.exe lock --check --offline
+git diff --check
+~~~
+
+verify：unit PASS（628 passed，0 failed/errors/skipped）、zenoh PASS（73 passed，12 WRS 项未选）、lint PASS、doctor PASS；uv lock --check 通过（130 包，差异仅 extra 名），diff --check 通过。环境：Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13.5、httpx 0.28.1、pytest 9.1.1、Ruff 0.16.8。
+
+发现并记录：`tests/integration/test_glm_runtime.py::test_glm_plan_runs_on_remote_mock_nodes` 在本轮改动前已失败——其断言要求所有技能说明都属于 robot 包，而提交 739c47c 起 `speak` 属于 speech 包；已改为按技能核对所属包，保留"每个技能携带自己的包说明"的原意。直接用 venv 解释器（不经 `-S scripts/run.py`）运行时，`tests/unit/test_example_tokens.py::test_concurrent_starters_publish_one_complete_credential` 在改动前后都稳定失败，经正式入口运行通过，与本轮改动无关，未处理。
+
+未验证：三种协议只经按厂商文档手写的离线夹具测试，没有对 GLM、OpenAI、Claude 或任何兼容服务联网调用；GLM 的 Claude 兼容端点是否接受 `x-api-key`、各厂商对 `LLM_REASONING_EFFORT` 各取值的实际接受情况、`LLM_PROXY` 的真实代理连通均为 UNVERIFIED。未运行 WRS 集成组、在线/语音/实机示例。
+
+
+## 2026-09-24：Qwen 工具调用兼容
+
+现象一：DashScope `qwen3.5-27b` 返回的 `plan` 是 JSON 字符串，PlanDecision 拒绝。原因是 `tool_schema()` 直接发送 Pydantic schema，`plan` 为 `anyOf[$ref, null]`、没有顶层 `type`；Qwen 系服务端按每个参数声明的 `type` 还原值，缺失时按字符串保留（vLLM issue #46924、PR #36032/#38973 同类），GLM 的解析器则对非 string 参数尝试 JSON 解码，所以 GLM 不受影响。修复：`tool_schema()` 内联全部 `$ref`，`plan` 改为可省略的 `object`；PlanDecision 与本地校验不变。
+
+现象二：`qwen3.8-flash` 在 `tool_choice=auto` 下有时把计划写进正文，按"正文只作回答"规则判定为 ANSWER、不执行。新增 `LLM_TOOL_CHOICE=auto|required`（默认 auto；Chat/Responses 发送同名值，Claude 映射为 `any`）。另在系统提示加入"step 只含 schema 字段、不复制技能 resources"，边界仍以 `extra="forbid"` 拒绝多余字段。
+
+在线对照（qwen3.8-flash，思考关闭，目标"机械臂向前移动。"，每组 12 次，临时脚本不入库）：现行提示 + auto 4 次正文、1 次多余字段校验失败；追加"不要在正文写 JSON"的提示 + auto 7 次正文（未采用）；强制指定 propose_plan 12/12 工具调用；required 12/12 工具调用。qwen3.5-27b 修复后的在线复测由用户运行，错误从字符串 `plan` 变为 step 多余字段 `resources_note`，说明 schema 修复生效。
+
+验证：`pytest tests/unit/test_llm.py tests/unit/test_processes.py tests/integration/test_llm_runtime.py` 248 passed；相关文件 Ruff check 通过，`git diff --check` 通过。未运行完整 verify、WRS 集成组和语音 viewer；`LLM_TOOL_CHOICE=required` 在 GLM、OpenAI、Claude 上未联网验证（UNVERIFIED）。
+
+### 节点发现首次等待
+
+现象：07 已就绪，09 连接后立即 `nodes()` 报 asr/voice 未就绪。`System.connect` 按后缀依次打开 4 个 Zenoh 会话，实测各会话的存活令牌在 connect 返回后陆续到达，最晚（asr）约 0.5–0.7 秒；`NodeRegistry.refresh` 首次只等 0.3 秒，之后按"无令牌"判为 offline。对运行中的 07 连续 3 次新建连接，首次 `nodes()` 每次都漏掉 voice/asr，1 秒后全部就绪。修复：首次等待上限改为 2.0 秒，节点在线时收到令牌即返回；此后仍由原生存活事件驱动。复测 5 次首次查询全部 5 节点就绪，耗时 0.39–0.64 秒。只有首次查询时节点确实不在线才会等满上限。
+
+### move_relative 上限 5 cm → 10 cm
+
+`RelativeMoveArgs` 每轴 ±0.1 m、合成位移非零且 ≤ 0.1 m，错误码改为 `displacement_must_be_nonzero_and_at_most_10cm`；技能描述、robot `SKILL.md`、examples/README、DEVELOPMENT 同步。技能版本仍为 1，节点与 Agent 必须使用同一份代码（`actions.py` 核对 parameters schema）。上文与 WRS_AUDIT.md 中的 5 cm 为当时记录，不改写。
+
+运动学核对（真实 WRS UR7E `begin_relative` + FK，本地不连接硬件）：home/B/C 各 ±X/±Y/±Z 共 18 次 10 cm 目标全部有解，末端误差 < 0.001 mm，单关节最大变化 0.33 rad（执行层上限 1 rad）；5 cm 对照为 0.15 rad。仅覆盖命名姿态出发的单轴移动，不代表工作空间任意位置、斜向组合或连续多步都可达；仍无碰撞检查。
+
+验证：`./scripts/run.ps1 -m pytest -q tests/unit` 639 passed；`tests/integration/test_wrs.py -k relative` 1 passed；相关文件 Ruff check 通过。未运行完整 Zenoh/WRS 集成组（registry 改动只经单元测试和上述在线复测）。
+
+### 规划耗时与 token 数显示
+
+`Runtime.snapshot()` 新增 `last_planning`：`total_s`（规划前快照加模型调用，Runtime 测量）、`model_s`（`planner.plan` 耗时，缓存命中为 None）以及服务商回报的 `input_tokens`/`output_tokens`/`reasoning_tokens`（`planner.token_counts` 统一 Chat 与 Responses/Claude 的名称，非整数记为 None）。每次规划开始时清空；被替换目标的迟到回复不写入。仅供显示，不参与超时或安全判断。09 viewer 新增“耗时”（识别＝松手到拿到结果、规划、执行＝观察到任务开始到终态，本地轮询计时，误差约一帧）和“模型输出”两行。
+
+验证：单元测试 640 passed；`tests/integration/test_llm_runtime.py tests/integration/test_cache_runtime.py tests/integration/test_task_identity.py` 13 passed，`test_llm_runtime.py test_voice_text.py test_sync_api.py` 21 passed；Ruff check 通过；09 仅 `py_compile`，未在运行中的 07 上复测（UNVERIFIED）。
+
+### CLARIFY / ANSWER 精简
+
+此前只有 execute 要求 `text` 留空、`speak` 要求约 20 字以内，澄清和回答没有长度约束（仅 `PlanDecision.text` 2048 字符硬上限，超出即校验失败而非截断）。系统提示新增：回答与澄清用用户的语言、一到两句短句，澄清只问一个能消除歧义的问题。只是提示，不是硬性保证。验证：`tests/unit/test_llm.py` 166 passed，Ruff 通过；在线效果未测（UNVERIFIED）。
+
+### 09 新目标先停下上一条
+
+此前上一条未结束时 09 直接拒绝新目标，要求先说“停止”。现在 09 自动经 Voice 控制通道发“停止”，确认上一条停下（任务终态、规划不在 WAITING）后提交新目标；5 秒内未停下或变为 UNKNOWN 则放弃新目标。只保留最新一句，说“停止”或按“立即停止”会丢弃等待中的目标。Runtime 仍不做任务替换，策略留在客户端。
+
+Runtime 改动：`interrupt()` 遇到 WAITING 规划时取消该规划协程。WAITING 表示这次调用尚未启动任务，只丢弃模型请求（其回复本来也会被判过期）；此前协程要等模型返回，期间 `goal()` 一直报 `planner_unavailable_or_busy`。新增集成测试 `test_stop_drops_pending_model_call_so_the_next_goal_is_accepted_at_once`，去掉该改动时以 `planner_unavailable_or_busy` 失败；`test_interrupt_planning_without_task_rejects_late_result` 改为断言规划协程已取消。
+
+验证：单元测试 640 passed；`./scripts/run.ps1 -m pytest tests/integration/test_system.py test_task_identity.py test_voice_text.py test_qwen_voice_wrs.py` 22 passed；Ruff 通过。09 仅 `py_compile`，未在运行中的 07 上手动复测（UNVERIFIED）。

@@ -282,6 +282,21 @@ def test_capture_node_uses_own_interpreter_and_carries_its_vocabulary(tmp_path):
     assert "--asr-backend" not in stack.node_command("voice")
 
 
+def test_speech_nodes_do_not_inherit_python_path(tmp_path, monkeypatch):
+    from wrs_agent.processes import LocalStack
+
+    interpreter = tmp_path / "python.exe"
+    interpreter.touch()
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "other-venv-site-packages"))
+    stack = LocalStack(bindings="tests/fixtures/asr.toml", tts_backend="qwen",
+                       tts_python=interpreter, asr_backend="qwen", asr_python=interpreter)
+    stack.endpoint = "tcp/127.0.0.1:9999"
+    for role in ("tts", "asr"):
+        env = stack.node_env(stack.node_command(role))
+        assert "PYTHONPATH" not in env and env["WRS_AGENT_TOKEN"] == stack.token
+    assert "PYTHONPATH" in stack.node_env(stack.node_command("agent"))
+
+
 @pytest.mark.parametrize("failure", ["write", "abort", "close"])
 def test_audio_device_errors_never_look_like_confirmed_success(monkeypatch, failure):
     from wrs_agent.speech.tts import play_audio

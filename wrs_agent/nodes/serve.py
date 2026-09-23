@@ -54,8 +54,8 @@ async def serve_node(
         raise ValueError("unsupported_asr_backend")
     if backend not in {"mock", "wrs"}:
         raise ValueError("unsupported_backend")
-    if model_provider not in {"mock", "glm"} or (
-        model_provider == "glm" and (not live_model or deferred_planner)
+    if model_provider not in {"mock", "llm"} or (
+        model_provider == "llm" and (not live_model or deferred_planner)
     ):
         raise ValueError("invalid_model_provider_or_missing_live_opt_in")
     if not 0 < duration <= 30:
@@ -109,10 +109,10 @@ async def serve_node(
                 owner = make_mock_tts(journal, duration=duration)
             register_actions(transport, owner)
         elif role == "agent":
-            if model_provider == "glm":
-                from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
+            if model_provider == "llm":
+                from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
 
-                model = GLMClient(GLMConfig.from_env(), live_model=live_model)
+                model = LLMClient(LLMConfig.from_env(), live_model=live_model)
             else:
                 model = MockClient(deferred=deferred_planner)
             registry = NodeRegistry(

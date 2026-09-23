@@ -35,6 +35,7 @@ enabled = false
 observe = "wrs"
 move_named_pose = "wrs"
 move_relative = "wrs"
+set_gripper = "wrs"
 pick = "wrs"
 place = "wrs"
 verify = "wrs"

@@ -164,15 +164,15 @@ async def test_successful_greeting_uses_normal_action_and_keeps_node_running(mon
     assert closed.is_set()
 
 
-async def test_missing_glm_config_exits_before_launching_nodes(monkeypatch):
-    entry = runpy.run_path("examples/voice/07_start_glm_voice.py")
+async def test_missing_model_config_exits_before_launching_nodes(monkeypatch):
+    entry = runpy.run_path("examples/voice/07_start_llm_voice.py")
     def unexpected_launch(**kwargs):
         raise AssertionError("Missing configuration must not start any node")
 
     monkeypatch.setitem(entry["main"].__globals__, "LocalStack", unexpected_launch)
-    monkeypatch.delenv("GLM_MODEL", raising=False)
-    monkeypatch.delenv("GLM_API_KEY", raising=False)
-    with pytest.raises(SystemExit, match="GLM 配置错误"):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    with pytest.raises(SystemExit, match="模型配置错误"):
         await entry["main"]()
 
 

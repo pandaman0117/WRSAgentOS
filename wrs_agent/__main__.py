@@ -17,7 +17,12 @@ async def main():
     parser.add_argument("--node-id")
     parser.add_argument("--bindings")
     parser.add_argument("--scene", help="Initial WRS scene TOML (world coordinates)")
-    parser.add_argument("--model-provider", choices=["mock", "glm"], default="mock")
+    parser.add_argument(
+        "--model-provider",
+        choices=["mock", "llm"],
+        default="mock",
+        help="llm reads LLM_PROTOCOL/LLM_BASE_URL/LLM_MODEL/LLM_API_KEY; see .env.example",
+    )
     parser.add_argument("--live-model", action="store_true")
     parser.add_argument("--backend", choices=["mock", "wrs"], default="mock")
     parser.add_argument("--tts-backend", choices=["mock", "qwen"], default="mock")
@@ -34,7 +39,7 @@ async def main():
     parser.add_argument(
         "--deferred-planner",
         action="store_true",
-        help="offline test fixture; no GLM request is sent",
+        help="offline test fixture; no model request is sent",
     )
     parser.add_argument(
         "--fault",
@@ -49,8 +54,8 @@ async def main():
         ],
     )
     args = parser.parse_args()
-    if args.model_provider == "glm" and (not args.live_model or args.deferred_planner):
-        parser.error("GLM requires --live-model and cannot use --deferred-planner")
+    if args.model_provider == "llm" and (not args.live_model or args.deferred_planner):
+        parser.error("an online model requires --live-model and cannot use --deferred-planner")
     if args.duration <= 0 or args.duration > 30:
         parser.error("duration must be in (0, 30]")
     if args.role == "launch":

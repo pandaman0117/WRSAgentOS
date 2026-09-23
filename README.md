@@ -1,6 +1,6 @@
 # WRS-Agent V1
 
-Zenoh 上的轻量机器人 Agent Runtime。模型提出计划，Runtime 检查和调度，动作节点负责实际执行与停止确认。默认使用独立进程的 Mock 机器人、Mock TTS、Agent 和 Voice；WRS 提供 Lite6 虚拟运动适配。
+Zenoh 上的轻量机器人 Agent Runtime。模型提出计划，Runtime 检查和调度，动作节点负责实际执行与停止确认。默认使用独立进程的 Mock 机器人、Mock TTS、Agent 和 Voice；WRS 提供 UR7E 虚拟运动适配。
 
 ## 先跑一个动作
 
@@ -31,7 +31,7 @@ with launch(backend="wrs") as system:
 | 节点独立运行 | [启动服务与连接客户端](examples/README.md#connect) |
 | 开发新节点和技能 | [greet 合同与处理函数](examples/nodes/greet_skill.py)、[分进程运行步骤](examples/README.md#nodes) |
 | 接入 WRS | [虚拟运动](examples/wrs/01_move.py)、[取消](examples/wrs/02_cancel.py) |
-| 接入 GLM | [在线规划](examples/models/01_plan.py)、[在线执行](examples/models/02_execute.py) |
+| 接入在线模型（GLM/OpenAI/Claude/兼容服务） | [在线规划](examples/models/01_plan.py)、[在线执行](examples/models/02_execute.py)，配置见 [.env.example](.env.example) |
 
 动作、任务与规划都有各自句柄。`status()` 查询一次，`wait()` 等终态，`watch()` 观察进度；任务或动作的 `cancel()` 返回受理结果，停止完成另行确认。取消结束后可以 `start()` 一个独立新任务，旧句柄始终保留原身份。
 
@@ -76,9 +76,9 @@ Router 使用固定版本 1.9.0，依次查找 `WRS_AGENT_ZENOHD` 指定的可�
 
 ## 模型与设备的验证范围
 
-教学示例中的机器人统一使用真实 WRS 后端。`models/01_plan.py` 和 `02_execute.py` 直接在线调用 GLM，凭据只从环境变量读取，不会失败后回退成固定响应。普通验收只使用协议测试样本，不调用收费模型。其他规划句柄示例仍使用确定的 home 模板，TTS 尚为 Mock。
+教学示例中的机器人统一使用真实 WRS 后端。`models/01_plan.py` 和 `02_execute.py` 直接在线调用 `LLM_*` 所配置的模型，凭据只从环境变量读取，不会失败后回退成固定响应。普通验收只使用协议测试样本，不调用收费模型。其他规划句柄示例仍使用确定的 home 模板，TTS 尚为 Mock。
 
-WRS profile 支持 observe / move_named_pose / move_relative，实际计算 Lite6 的 IK/FK；方向位移有界并验证目标。独立节点、方向移动和 WRS 页面显示见 [WRS 示例](examples/README.md#wrs-虚拟机器人)。抓放、碰撞规划、真实硬件、真实 ASR/音频、双机部署与性能基准均未验收。
+WRS profile 支持 observe / move_named_pose / move_relative，实际计算 UR7E 的 IK/FK；方向位移有界并验证目标。独立节点、方向移动和 WRS 页面显示见 [WRS 示例](examples/README.md#wrs-虚拟机器人)。抓放、碰撞规划、真实硬件、真实 ASR/音频、双机部署与性能基准均未验收。
 
 ## 验收与交接
 
@@ -87,7 +87,7 @@ WRS profile 支持 observe / move_named_pose / move_relative，实际计算 Lite
 ./scripts/run.ps1 scripts/verify.py --wrs
 ```
 
-前者运行单元测试、真实 Zenoh/Mock 集成测试、Ruff 和环境检查；后者额外验证实际 WRS 节点、全部有限机器人示例和可视化服务。常驻服务和独立客户端按组测试；GLM 测试检查凭据边界和协议，不触发联网调用。
+前者运行单元测试、真实 Zenoh/Mock 集成测试、Ruff 和环境检查；后者额外验证实际 WRS 节点、全部有限机器人示例和可视化服务。常驻服务和独立客户端按组测试；模型测试用离线夹具检查三种线协议与凭据边界，不触发联网调用。
 
 每份示例均登记在 `scripts/example_catalog.py`，验收同时检查退出码和关键结果，避免把打印 FAILED 的程序当成通过。最新实际证据见 [ACCEPTANCE.md](docs/ACCEPTANCE.md)，机器报告保存在忽略的 `reports/`。
 

@@ -8,7 +8,7 @@ from conftest import control, eventually
 from wrs_agent.bindings import load_bindings
 from wrs_agent.nodes.actions import ActionClient
 from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
+from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
 from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, Plan, Step, TaskCancelRequest, TaskRequest, new_id
@@ -40,7 +40,7 @@ class OfflineNode(ActionClient):
         return self.executor.status(action_id)
 
 
-@pytest.mark.parametrize("provider_kind", ["mock", "glm_http_fixture"])
+@pytest.mark.parametrize("provider_kind", ["mock", "llm_http_fixture"])
 async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
     env = make_env()
     provider = MockClient(
@@ -49,17 +49,21 @@ async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
         deferred=True,
     )
     entered, gate = provider.entered, provider.gate
-    if provider_kind == "glm_http_fixture":
+    if provider_kind == "llm_http_fixture":
         await provider.aclose()
         entered, gate = asyncio.Event(), asyncio.Event()
 
         async def respond(request):
             entered.set()
             await gate.wait()
-            fixture = Path(__file__).parents[2] / "examples/models/fixtures/glm_tool_call.json"
-            return httpx.Response(200, content=fixture.read_bytes())
+            fixtures = Path(__file__).parents[2] / "examples/models/fixtures"
+            reply = fixtures / "openai_chat_tool_call.json"
+            return httpx.Response(200, content=reply.read_bytes())
 
-        provider = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(respond))
+        provider = LLMClient(
+            LLMConfig(model="fixture", base_url="https://model.invalid/v1"),
+            transport=httpx.MockTransport(respond),
+        )
     _, bindings = load_bindings()
     runtime = Runtime({"wrs": OfflineNode(env)}, bindings, ModelPlanner(provider))
     try:

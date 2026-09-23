@@ -32,6 +32,18 @@ class Planner(Protocol):
     async def plan(self, request: PlanRequest) -> PlanDecision: ...
 
 
+def token_counts(usage: dict) -> dict:
+    """Provider-reported counts under one set of names; Chat and Responses/Claude differ.
+    The service supplies these numbers, so anything but an integer becomes None."""
+    details = usage.get("completion_tokens_details") or usage.get("output_tokens_details")
+    counts = {
+        "input_tokens": usage.get("prompt_tokens", usage.get("input_tokens")),
+        "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
+        "reasoning_tokens": details.get("reasoning_tokens") if isinstance(details, dict) else None,
+    }
+    return {name: value if type(value) is int else None for name, value in counts.items()}
+
+
 @dataclass(frozen=True)
 class PlanTiming:
     """Spans stay out of PlanDecision: a decision is model-supplied content, so the model

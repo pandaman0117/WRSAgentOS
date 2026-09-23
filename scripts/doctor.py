@@ -55,7 +55,7 @@ def main():
             "reason": "Use --probe-wrs for virtual import/FK only",
         },
         "hardware": "UNVERIFIED",
-        "glm_live": "UNVERIFIED",
+        "llm_live": "UNVERIFIED",
         "audio_live": "UNVERIFIED",
     }
     if args.probe_wrs:

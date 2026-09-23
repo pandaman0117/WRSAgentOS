@@ -1,0 +1,44 @@
+{
+  "id": "offline-fixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "offline-fixture",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "offline-fixture"
+    },
+    {
+      "type": "tool_use",
+      "id": "proposal-1",
+      "name": "propose_plan",
+      "input": {
+        "kind": "execute",
+        "plan": {
+          "steps": [
+            {"step_id": "observe", "skill": "observe"},
+            {"step_id": "pick", "skill": "pick", "args": {"object": "A"}, "depends_on": ["observe"]},
+            {
+              "step_id": "place",
+              "skill": "place",
+              "args": {"object": "A", "target": "B"},
+              "depends_on": ["pick"]
+            },
+            {
+              "step_id": "verify",
+              "skill": "verify",
+              "args": {"object": "A", "target": "B"},
+              "depends_on": ["place"]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 30,
+    "output_tokens": 70
+  }
+}

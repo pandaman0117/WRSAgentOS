@@ -1,0 +1,27 @@
+{
+  "id": "offline-fixture",
+  "object": "response",
+  "model": "offline-fixture",
+  "status": "completed",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "reasoning-1",
+      "summary": []
+    },
+    {
+      "type": "function_call",
+      "id": "call-item-1",
+      "call_id": "proposal-1",
+      "name": "propose_plan",
+      "arguments": "{\"kind\":\"execute\",\"plan\":{\"steps\":[{\"step_id\":\"observe\",\"skill\":\"observe\"},{\"step_id\":\"pick\",\"skill\":\"pick\",\"args\":{\"object\":\"A\"},\"depends_on\":[\"observe\"]},{\"step_id\":\"place\",\"skill\":\"place\",\"args\":{\"object\":\"A\",\"target\":\"B\"},\"depends_on\":[\"pick\"]},{\"step_id\":\"verify\",\"skill\":\"verify\",\"args\":{\"object\":\"A\",\"target\":\"B\"},\"depends_on\":[\"place\"]}]}}",
+      "status": "completed"
+    }
+  ],
+  "usage": {
+    "input_tokens": 30,
+    "output_tokens": 70,
+    "output_tokens_details": {"reasoning_tokens": 20},
+    "total_tokens": 100
+  }
+}

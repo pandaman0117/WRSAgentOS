@@ -5,37 +5,61 @@ from pydantic import ValidationError
 from wrs_agent.schemas import ErrorInfo
 
 _MESSAGES = {
-    "glm_thinking_invalid": (
-        "GLM_THINKING 应为 off/low/high/max；留空则由账号模型自行决定思考深度。"
-        "off 关闭思考，GLM-5.3 不接受，该模型最省时的档位是 low。"
+    "llm_model_missing": (
+        "请把 LLM_MODEL 设为账号上已开通的模型 ID；LLM_API_KEY 与 LLM_BASE_URL 不会选择模型。"
+        "旧版 GLM_* 变量已改为 LLM_*，见 .env.example。使用 .env 时需让 IDE 运行配置加载该文件。"
     ),
-    "glm_http_400": (
-        "GLM 拒绝了请求参数。若与思考深度有关，请改用 GLM_THINKING=low："
-        "厂商文档称 GLM-5.3 系列不接受关闭思考，实际是否接受由服务端和端点决定。"
+    "llm_model_invalid": (
+        "LLM_MODEL 应为 1 到 128 个字符的模型 ID：字母或数字开头，"
+        "之后可含字母、数字和 _ . : / @ + -。"
     ),
-    "glm_dns_error": "无法解析智谱服务域名。请检查 DNS、网络和代理设置。",
-    "glm_tls_certificate_error": "HTTPS 证书校验失败。请检查系统时间、证书和 HTTPS 代理配置。",
-    "glm_tls_error": "TLS 握手中断。请检查代理路由或 HTTPS 拦截配置。",
-    "glm_proxy_error": "代理连接失败。请检查代理是否运行及其地址和端口。",
-    "glm_connect_error": "无法建立智谱服务连接。请检查网络、代理和防火墙。",
-    "glm_protocol_error": "智谱服务或代理未返回完整的 HTTP 响应。",
-    "glm_transport_error": "GLM 网络传输失败。可运行 scripts/check_glm_connection.py 排查。",
-    "glm_timeout": "GLM 请求超时。请检查网络或稍后重试。",
-    "glm_model_missing": (
-        "Set GLM_MODEL to a model ID enabled for your account. "
-        "GLM_API_KEY and GLM_BASE_URL do not select a model. "
-        "If using .env, configure this IDE run configuration to load that file."
+    "llm_base_url_missing": (
+        "请设置 LLM_BASE_URL，例如 https://api.openai.com/v1；不假定任何默认厂商，"
+        "各厂商地址见 .env.example。"
     ),
-    "glm_model_invalid": (
-        "GLM_MODEL must be a model ID of 1 to 128 letters, digits, dots, underscores or hyphens."
+    "llm_base_url_invalid": (
+        "LLM_BASE_URL 必须是不含账号、查询串和片段的 https 地址；"
+        "明文 http 只允许回环地址（本机 vLLM/Ollama）。"
     ),
-    "glm_base_url_invalid": (
-        "GLM_BASE_URL must be a supported GLM endpoint; see .env.example."
+    "llm_protocol_invalid": (
+        "LLM_PROTOCOL 应为 openai_chat、openai_responses 或 anthropic_messages。"
     ),
-    "glm_api_key_missing_or_invalid": (
-        "Set GLM_API_KEY to your API key without whitespace. "
-        "If using .env, configure this IDE run configuration to load that file."
+    "llm_reasoning_effort_invalid": (
+        "LLM_REASONING_EFFORT 应为 none/minimal/low/medium/high/xhigh/max；"
+        "留空则由服务端默认。具体模型接受哪些取值以厂商文档为准。"
     ),
+    "llm_tool_choice_invalid": "LLM_TOOL_CHOICE 应为 auto 或 required；留空为 auto。",
+    "llm_max_tokens_invalid": "LLM_MAX_TOKENS 应为 128 到 65536 之间的整数。",
+    "llm_timeout_s_invalid": "LLM_TIMEOUT_S 应为大于 0、不超过 300 的秒数。",
+    "llm_extra_body_invalid": "LLM_EXTRA_BODY 应为不超过 4096 字节的 JSON 对象。",
+    "llm_extra_headers_invalid": (
+        "LLM_EXTRA_HEADERS 应为 JSON 对象，值为 ASCII 字符串；"
+        "不能覆盖 Authorization、x-api-key 等由适配器管理的头。"
+    ),
+    "llm_proxy_invalid": "LLM_PROXY 应为 http:// 或 https:// 代理地址，不含查询串和片段。",
+    "llm_extra_body_conflict": (
+        "LLM_EXTRA_BODY 与适配器已生成的字段重名（例如同时设置了 LLM_REASONING_EFFORT）。"
+        "只保留一处设置。"
+    ),
+    "llm_api_key_missing_or_invalid": (
+        "请把 LLM_API_KEY 设为不含空白的 API Key；仅回环地址的本地服务可以留空。"
+        "使用 .env 时需让 IDE 运行配置加载该文件。"
+    ),
+    "llm_http_400": (
+        "模型服务拒绝了请求参数。常见原因：该模型不支持所设 LLM_REASONING_EFFORT、"
+        "LLM_TOOL_CHOICE=required、LLM_EXTRA_BODY 中的字段或 LLM_MAX_TOKENS；"
+        "可先清空这些项再试。"
+    ),
+    "llm_http_401": "模型服务拒绝了凭据。请检查 LLM_API_KEY 与 LLM_BASE_URL 是否属于同一服务。",
+    "llm_http_404": "模型服务找不到该路径或模型。请检查 LLM_BASE_URL、LLM_PROTOCOL 与 LLM_MODEL。",
+    "llm_dns_error": "无法解析模型服务域名。请检查 DNS、网络和 LLM_PROXY。",
+    "llm_tls_certificate_error": "HTTPS 证书校验失败。请检查系统时间、证书和 HTTPS 代理配置。",
+    "llm_tls_error": "TLS 握手中断。请检查代理路由或 HTTPS 拦截配置。",
+    "llm_proxy_error": "代理连接失败。请检查 LLM_PROXY 所指代理是否运行及其地址和端口。",
+    "llm_connect_error": "无法建立模型服务连接。请检查网络、LLM_PROXY 和防火墙。",
+    "llm_protocol_error": "模型服务或代理未返回完整的 HTTP 响应。",
+    "llm_transport_error": "模型网络传输失败。可运行 scripts/check_llm_connection.py 排查。",
+    "llm_timeout": "模型请求超时。请检查网络，或调大 LLM_TIMEOUT_S 后重试。",
     # unordered_resource_conflict 不在这张表里：它的正文要点名是哪两个步骤和哪个资源，
     # 由 runtime.require_ordered_resources 就地构造，否则这里的通用句会盖掉那些名字。
     "provider_not_found": "No execution provider is configured for this skill.",

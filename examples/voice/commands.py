@@ -11,6 +11,8 @@ COMMANDS = {
     "向前": ("move_relative", {"dx": 0.02}, "正在前移。"),
     "向后": ("move_relative", {"dx": -0.02}, "正在后移。"),
     "回到初始位置": ("move_named_pose", {"pose": "home"}, "正在回到初始位置。"),
+    "打开夹爪": ("set_gripper", {"command": "open"}, "正在打开夹爪。"),
+    "关闭夹爪": ("set_gripper", {"command": "close"}, "正在关闭夹爪。"),
 }
 
 

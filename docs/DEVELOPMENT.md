@@ -1,6 +1,6 @@
 # 开发交接：先跑通，再替换后端
 
-当前交付的是可以继续分工开发的软件 V1：任务调度、按资源取消与停止确认、任务句柄、节点目录、技能合同、GLM 非流式适配已经连接起来。默认用真实 Zenoh、多进程 Mock 节点验收；WRS 另有真实 Lite6 模型的虚拟 FK 示例。context 保持现状，先把后端接入做好。
+当前交付的是可以继续分工开发的软件 V1：任务调度、按资源取消与停止确认、任务句柄、节点目录、技能合同、在线模型非流式适配（OpenAI Chat/Responses、Anthropic Messages 三种线协议）已经连接起来。默认用真实 Zenoh、多进程 Mock 节点验收；WRS 另有真实 UR7E 模型的虚拟 FK 示例。context 保持现状，先把后端接入做好。
 
 ## 一次看清系统
 
@@ -80,9 +80,9 @@ Python 入口为 `await serve_node("tts", node_id="speaker", ..., action_factory
 
 ## WRS：先接虚拟能力
 
-现有 WRS Node 已把固定版本 Lite6 接到公共动作协议。`examples/wrs/01_move.py` 展示运动和结果查询，`02_cancel.py` 展示取消，`03_new_action_after_cancel.py` 展示确认取消后接收新动作。同步 FK 在所属工作线程运行；控制先撤销旧权限，等在途调用返回后再确认停止。
+现有 WRS Node 已把固定版本 UR7E 接到公共动作协议。`examples/wrs/01_move.py` 展示运动和结果查询，`02_cancel.py` 展示取消，`03_new_action_after_cancel.py` 展示确认取消后接收新动作。同步 FK 在所属工作线程运行；控制先撤销旧权限，等在途调用返回后再确认停止。
 
-当前真实 WRS profile 支持 observe / move_named_pose / move_relative，支持 home/B/C 命名姿态，以及世界坐标系每次最多 5 cm 的末端目标位移。独立节点、方向控制和只读 WRS viewer 见 [WRS 示例](../examples/README.md#wrs-虚拟机器人)。pick/place/物体 verify 和碰撞规划仍明确 unsupported；Mock 的抓取成功不能作为真实 WRS 能力证明。下一步可在适配器内加入已验证的夹爪、目标几何、碰撞与结果观测，再扩展对应技能。长时间规划宜放独立进程，设备控制保持单一所有者。
+当前真实 WRS profile 支持 observe / move_named_pose / move_relative，支持 home/B/C 命名姿态，以及世界坐标系每次最多 10 cm 的末端目标位移。独立节点、方向控制和只读 WRS viewer 见 [WRS 示例](../examples/README.md#wrs-虚拟机器人)。pick/place/物体 verify 和碰撞规划仍明确 unsupported；Mock 的抓取成功不能作为真实 WRS 能力证明。下一步可在适配器内加入已验证的夹爪、目标几何、碰撞与结果观测，再扩展对应技能。长时间规划宜放独立进程，设备控制保持单一所有者。
 
 节点最终准入仍必须检查 boot_id、control_epoch、state_version、短期授权和资源占用；Runtime 的锁不替代节点校验。不能确认设备效果时使用 UNKNOWN，不能把“函数返回了”直接当成物理成功。参考 `tests/integration/test_wrs.py` 和 `tests/unit/test_wrs_boundary.py`。
 
@@ -108,16 +108,28 @@ UI 可使用 `System.connect()` 的异步入口，使等待任务进度与用户
 
 动作/任务/规划结果的 state 分别为 ActionState、TaskState、GoalState，可从 wrs_agent 导入；使用字符串枚举，消息中的字符串值不变。状态结果主要是类型化对象；`system.status()` 的 Runtime 总览、`nodes()` 目录仍为字典。不要假设每个返回值都有相同字段。错误读取 error.code，UNKNOWN 要保留并显示。浏览器项目可随后在独立服务中包装这些 API；本轮不引入 Web 框架、前端依赖或新的控制协议。
 
-## GLM：完整软件路径已接好
+## 在线模型：按线协议接入，不按厂商
 
 两份独立在线文件：
 
-- `examples/models/01_plan.py`：读取实际 WRS 状态/能力，在线 GLM 只提出计划。
-- `examples/models/02_execute.py`：GLMClient → ModelPlanner → Runtime → Zenoh → 独立 WRS 节点。脚本拥有 Runtime，不另启动 Agent。
+- `examples/models/01_plan.py`：读取实际 WRS 状态/能力，在线模型只提出计划。
+- `examples/models/02_execute.py`：LLMClient → ModelPlanner → Runtime → Zenoh → 独立 WRS 节点。脚本拥有 Runtime，不另启动 Agent。
 
-配置环境变量 GLM_API_KEY、GLM_MODEL、GLM_BASE_URL 后直接运行，会访问在线服务；没有离线回退或默认关闭开关。`.env` 不自动读取，凭据不能写进代码。协议回归样本位于 `examples/models/fixtures/`，只供测试；自动验收不调用真实模型。
+配置 `LLM_PROTOCOL`、`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` 后直接运行，会访问在线服务；没有离线回退或默认关闭开关。`.env` 不自动读取，凭据不能写进代码。协议回归样本位于 `examples/models/fixtures/`，只供测试；自动验收不调用真实模型。
 
-常驻 Agent 的已有 CLI 仍支持 `-m wrs_agent launch --model-provider glm --live-model`。GLM 失败保留结构化错误，不换成 Mock 成功；明确停止不等模型返回，迟到结果失效。目前只有非流式单工具提案，没有流式输出或 GLM TTS。
+常驻 Agent 的 CLI 使用 `-m wrs_agent launch --model-provider llm --live-model`。模型失败保留结构化错误（`llm_*` 错误码），不换成 Mock 成功；明确停止不等模型返回，迟到结果失效。目前只有非流式单工具提案，没有流式输出或 GLM TTS。
+
+`wrs_agent/planner/providers/` 的分层：
+
+| 文件 | 负责 |
+|---|---|
+| `__init__.py` | `ModelRequest`/`ModelReply`/`ModelClient` 合同；Planner 只依赖它 |
+| `llm.py` | `LLMConfig`（读 `LLM_*`、校验端点/代理/头）、`LLMClient`（HTTP、超时、大小上限、错误分类）、`PROTOCOLS` 表 |
+| `wire.py` | 三种协议共用的系统提示、`propose_plan` 工具、`LLMError`、`LLM_EXTRA_BODY` 合并规则 |
+| `openai_chat.py` / `openai_responses.py` / `anthropic_messages.py` | 各自的 `PATH`、`headers(key)`、`request_body(request, config)`、`parse_reply(data)` |
+| `mock.py` | 确定性离线夹具 |
+
+扩展方式按成本从低到高：同一协议上的新厂商只改环境变量；厂商私有字段放 `LLM_EXTRA_BODY`/`LLM_EXTRA_HEADERS`；新线协议（例如 Gemini 原生 `generateContent`）新增一个含上述四个名字的模块，加入 `PROTOCOLS` 与 `LLMConfig.protocol` 的取值，并补 `tests/unit/test_llm.py` 的夹具参数。非 HTTP 的模型（本地进程内推理等）直接实现 `ModelClient` 协议，交给 `ModelPlanner`。不引入厂商 SDK、LiteLLM 或 LangChain：三种协议的请求/回复都是小型 JSON，自己解析才能保证"最多一个提案、散文永远只是回答、未完成即拒绝"这些规则在每个厂商上一致。
 
 ## 合并验收与后续范围
 

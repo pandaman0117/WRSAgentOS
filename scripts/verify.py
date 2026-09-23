@@ -92,8 +92,8 @@ def main():
         print(f"{name}: {status}", flush=True)
     for test_id, reason in {
         **({} if args.wrs else {"wrs_runtime": "Opt in with scripts/verify.py --wrs."}),
-        "wrs_pick_place": "Unsupported in bare Lite6 profile; no validated grasp/contact scene.",
-        "glm_live": "Online examples excluded from automated checks; no live provider call.",
+        "wrs_pick_place": "Unsupported in bare UR7E profile; no validated grasp/contact scene.",
+        "llm_live": "Online examples excluded from automated checks; no live provider call.",
         "audio_live": "Qwen model/audio runs require opt-in; excluded from default checks.",
         "vision_node": "No independent Vision process in this minimum increment.",
         "hardware": "Hardware backend cannot be selected.",

@@ -1,4 +1,4 @@
-param([ValidateSet("glm")][string[]]$Extra = @())
+param([ValidateSet("llm")][string[]]$Extra = @())
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent

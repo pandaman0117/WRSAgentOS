@@ -68,8 +68,9 @@ def test_router_version_probe_failure_is_not_accepted(error):
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["agent", "--model-provider", "glm"],
-        ["agent", "--model-provider", "glm", "--live-model", "--deferred-planner"],
+        ["agent", "--model-provider", "llm"],
+        ["agent", "--model-provider", "llm", "--live-model", "--deferred-planner"],
+        ["agent", "--model-provider", "glm", "--live-model"],
         ["wrs", "--duration", "0"],
         ["wrs", "--backend", "hardware"],
         ["wrs", "--backend", "wrs_virtual"],
@@ -161,12 +162,13 @@ def test_local_namespace_rejected_before_creating_files_or_processes(env_id):
         ("wrs", {"backend": "hardware"}, "unsupported_backend"),
         ("wrs", {"backend": "wrs_virtual"}, "unsupported_backend"),
         ("wrs", {"duration": 0}, "invalid_duration"),
-        ("agent", {"model_provider": "glm"}, "missing_live_opt_in"),
+        ("agent", {"model_provider": "llm"}, "missing_live_opt_in"),
         (
             "agent",
-            {"model_provider": "glm", "live_model": True, "deferred_planner": True},
+            {"model_provider": "llm", "live_model": True, "deferred_planner": True},
             "invalid_model_provider",
         ),
+        ("agent", {"model_provider": "glm", "live_model": True}, "invalid_model_provider"),
     ],
 )
 async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role, options, reason):
@@ -185,28 +187,35 @@ async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role
 @pytest.mark.parametrize(
     "variable,value",
     [
-        ("GLM_MODEL", None),
-        ("GLM_MODEL", ""),
-        ("GLM_MODEL", " \t"),
-        ("GLM_MODEL", "private-invalid-model!"),
-        ("GLM_MODEL", "x" * 129),
-        ("GLM_BASE_URL", "https://private-invalid-endpoint.example"),
-        ("GLM_API_KEY", None),
+        ("LLM_MODEL", None),
+        ("LLM_MODEL", ""),
+        ("LLM_MODEL", " \t"),
+        ("LLM_MODEL", "private-invalid-model!"),
+        ("LLM_MODEL", "x" * 129),
+        ("LLM_BASE_URL", None),
+        ("LLM_BASE_URL", "http://private-invalid-endpoint.example/v1"),
+        ("LLM_PROTOCOL", "private-invalid-protocol"),
+        ("LLM_REASONING_EFFORT", "private-invalid-effort"),
+        ("LLM_EXTRA_BODY", "private-not-json"),
+        ("LLM_EXTRA_BODY", '{"model": "private-override"}'),
+        ("LLM_API_KEY", None),
     ],
-    ids=["missing-model", "empty-model", "blank-model", "invalid-model",
-         "long-model", "invalid-endpoint", "missing-key"],
+    ids=["missing-model", "empty-model", "blank-model", "invalid-model", "long-model",
+         "missing-endpoint", "plaintext-endpoint", "invalid-protocol", "invalid-effort",
+         "invalid-extra-body", "conflicting-extra-body", "missing-key"],
 )
 async def test_online_model_examples_reject_invalid_config_before_launch(
     monkeypatch, filename, variable, value
 ):
     import runpy
 
-    from wrs_agent.planner.providers.glm import CODING_BASE_URL
     from wrs_agent.processes import ROOT
 
-    monkeypatch.setenv("GLM_API_KEY", "private-offline-test-key")
-    monkeypatch.setenv("GLM_MODEL", "test-model")
-    monkeypatch.setenv("GLM_BASE_URL", CODING_BASE_URL)
+    for name in ("PROTOCOL", "REASONING_EFFORT", "EXTRA_BODY", "EXTRA_HEADERS", "PROXY"):
+        monkeypatch.delenv("LLM_" + name, raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "private-offline-test-key")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/coding/paas/v4")
     if value is None:
         monkeypatch.delenv(variable, raising=False)
     else:

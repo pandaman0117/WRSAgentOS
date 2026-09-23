@@ -63,6 +63,22 @@ async def test_late_planner_reply_cannot_replace_new_task():
         ] == 1
 
 
+async def test_stop_drops_pending_model_call_so_the_next_goal_is_accepted_at_once():
+    async with LocalStack(deferred=True, duration=0.05) as stack:
+        system = stack.system
+        old = await system.goal("old goal")
+        await eventually(system.status, lambda s: s["planning"] == "WAITING")
+        assert (await system.send_text("停止")).accepted
+        assert (await system.planning(old.request_id).wait()).state == "STALE"
+        assert (await system.allow_actions()).accepted
+        # The model call is still unreleased; before, it held the planner until it returned.
+        new = await system.goal("put A in B")
+        await system.agent.request("request/test/planner/release", {}, control=True)
+        planned = await new.wait()
+        assert planned.state == "DONE" and (await planned.task.wait()).state == "SUCCEEDED"
+        assert (await system.status())["planner_calls"] == 2
+
+
 async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
     """Regression formerly hidden in the multi-scenario interrupt example."""
     async with LocalStack(deferred=True, duration=0.8) as stack:

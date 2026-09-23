@@ -171,6 +171,22 @@ HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制�
 
 只提取「配置是跟着组件走的冻结普通值、同名组件后写覆盖、显式构造零件再组合」三点机制，用普通 dataclass 与函数自行实现，启动设计与拒绝项见 NODE_LAUNCH.md。没有复制非平凡代码，没有引入 `Module`/`ModuleConfig` 继承、`autoconnect` 连线推断、entry-point 蓝图发现、命名空间机群或协调器，也没有安装 DimOS 或修改 WRS 源码。文档中的 `dimos run` / `dimos list` 命令未执行。
 
+## S24 · 多厂商模型接入设计核对（2026-09-23）
+
+固定本地参考提交（均为 Apache-2.0），只读审阅，未安装、未执行：
+
+- RPent 902ac6beef674559787d77ec130ed5e6834fc61b：`rpent/planner/base.py` 的 `build_api_model()` 用 pydantic-ai 解析 `anthropic:`/`openai:`（Responses）/`openai-chat:`（Chat 与兼容端、本地 vLLM）前缀；密钥与地址读各厂商自己的 `*_API_KEY`/`*_BASE_URL`；`REASONING_EFFORTS=("none","low","medium","high","xhigh")` 一套取值贯穿各 planner。
+- DimOS 29dfda595892dffb91c79f379eb44d1c737f9caf：`dimos/agents/mcp/mcp_client.py` 经 LangChain `init_chat_model` 接 `provider:model`（如 `ollama:`）；`dimos/evals/agents/lib/pi_config.py` 用 `PROVIDERS` 表记录每个协议的 key 变量与默认地址，`Thinking` 取值 off…max。
+- HoloAgent ef14d3152ca6246d8ae64920694c6c74581d246c：无统一抽象，各脚本直接构造 OpenAI/Azure SDK（`OPENAI_BASE_URL`、`GPT_PROVIDER` 等），豆包关思考经 `extra_body`。
+
+同时核对厂商文档：
+
+- https://platform.claude.com/docs/en/build-with-claude/effort ：`output_config.effort` 取 low/medium/high/xhigh/max，与 `thinking` 分开；部分新模型只支持自适应思考，关闭思考与高档位可能冲突（400）。
+- https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode 与对话补全 API 参考：GLM-5.x 默认开启思考，关闭用 `thinking.type=disabled`；`reasoning_effort` 仅 GLM-5.2 及以上读取，取值与 OpenAI 同名（none…max），各型号映射不同。
+- S07、S08 已列 OpenAI Responses 与 Claude 工具调用原生格式。
+
+提取的机制：三个参考都以"少数几种线协议覆盖多数厂商"为前提，差别只在由谁做翻译。本项目据此按线协议而不是按厂商划分适配（一个协议一个模块，四个名字），推理深度原样写入各协议自己的字段，厂商私有开关走显式 `LLM_EXTRA_BODY`。没有采用 `provider:model` 前缀（把协议和模型 ID 混进一个值，而 OpenRouter/Ollama 的模型 ID 本身含 `/` 和 `:`），没有采用每厂商一套 key 变量（同一套 `LLM_*` 更利于 IDE 运行配置切换），也没有引入 pydantic-ai、LangChain 或 LiteLLM：工具调用只有一个提案工具，自己解析才能在每个厂商上一致地执行"最多一个提案、散文只算回答、未完成即拒绝"。没有复制或改编上述仓库的非平凡代码。
+
 ## S22 · WRS 示例组织参考（2026-09-20）
 
 阅读固定 WRS2 提交 `2bb014b747833c2fd9345115fbe26ffb11376f20` 的本地文件：

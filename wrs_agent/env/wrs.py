@@ -1,4 +1,4 @@
-"""Actual WRS Lite6 IK/FK, owned by one worker. No hardware connection."""
+"""Actual WRS UR7E + DH50 IK/FK, owned by one worker. No hardware connection."""
 
 import asyncio
 import site
@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
+from math import pi
 from pathlib import Path
 
 from wrs_agent.actions import ActionExecutor, ExecutionUnknown, SkillFailure
@@ -15,10 +16,11 @@ from wrs_agent.schemas import ObjectData, RobotData, SceneData
 from wrs_agent.skills import SKILLS
 
 ROOT = Path(__file__).resolve().parents[2]
+# "home" must equal UR7E.home_qs: the model starts there and reports pose="home".
 POSES = {
-    "home": [0.0] * 6,
-    "B": [0.3, 0.2, 0.5, 0.0, 0.2, 0.0],
-    "C": [-0.3, 0.1, 0.4, 0.0, 0.1, 0.0],
+    "home": [0.0, -pi / 2, pi / 2, -pi / 2, -pi / 2, 0.0],
+    "B": [0.3, -1.2, 1.8, -2.2, -1.57, 0.0],
+    "C": [-0.3, -1.4, 1.5, -1.7, -1.57, 0.0],
 }
 
 
@@ -69,14 +71,21 @@ class VirtualModel:
 
     def __init__(self):
         self.wrs = load_wrs()
-        self.robot = self.wrs.xarm_lite6.Lite6()
+        self.robot, self.gripper = self.wrs.ur_ur7e.ur7e_with_gripper()
         self.tcp = self.robot.tcp("flange")
         self.scene = self.wrs.wss.Scene()
         self.robot.add_to_scene(self.scene)
         self.objects = {}
         self.path = None
+        self.jaw_path = None
         self.goal = None
         self.goal_tcp_tf = None
+        self.goal_width = self.width
+
+    @property
+    def width(self):
+        # Both DH50 fingers travel half the opening.
+        return float(self.gripper.qs[0] * 2.0)
 
     def load_scene(self, objects):
         sync_scene_objects(self.wrs, self.scene, objects, self.objects)
@@ -97,17 +106,27 @@ class VirtualModel:
             "tcp_name": self.tcp.name,
             "tcp_pos": tcp_tf[:3, 3].tolist(),
             "tcp_rotmat": tcp_tf[:3, :3].tolist(),
+            "gripper_width": self.width,
             "observed_at_ns": time.time_ns(),
             "valid": bool(
                 self.wrs.np.isfinite(self.robot.gl_lnk_tfarr).all()
+                and self.wrs.np.isfinite(self.gripper.gl_lnk_tfarr).all()
                 and self.wrs.np.isfinite(tcp_tf).all()
             ),
         }
 
     def begin(self, pose, count):
-        self.goal_tcp_tf = None
+        self.goal_tcp_tf, self.jaw_path, self.goal_width = None, None, self.width
         self.goal = self.wrs.np.asarray(POSES[pose], dtype=self.wrs.np.float32)
         self.path = self.wrs.wmij.interp_by_n(self.robot.qs.copy(), self.goal, count)
+
+    def begin_gripper(self, command, count):
+        low, high = (float(v) for v in self.gripper.jaw_range)
+        target = high if command == "open" else low
+        # Only the jaw moves; the arm goal is where it already is.
+        self.path, self.goal, self.goal_tcp_tf = None, self.robot.qs.copy(), None
+        self.jaw_path = self.wrs.np.linspace(self.width, target, count).clip(low, high)
+        self.goal_width = target
 
     def begin_relative(self, displacement, count):
         np = self.wrs.np
@@ -128,11 +147,14 @@ class VirtualModel:
         if not candidates:
             raise SkillFailure("relative_target_unreachable")
         goal = min(candidates, key=lambda q: np.linalg.norm(q - current))
-        self.path = self.wrs.wmij.interp_by_n(current, goal, count)
-        self.goal, self.goal_tcp_tf = goal, target
+        self.path, self.jaw_path = self.wrs.wmij.interp_by_n(current, goal, count), None
+        self.goal, self.goal_tcp_tf, self.goal_width = goal, target, self.width
 
     def step(self, index):
-        self.robot.fk(self.path[index])
+        if self.jaw_path is not None:
+            self.gripper.set_opening(float(self.jaw_path[index]))
+        else:
+            self.robot.fk(self.path[index])
         return self.read()
 
     def verify(self):
@@ -143,6 +165,7 @@ class VirtualModel:
             self.wrs.np.allclose(self.robot.qs, self.goal, atol=1e-6)
             and self.wrs.np.allclose(before, after, atol=1e-6)
             and self.wrs.np.isfinite(after).all()
+            and abs(self.width - self.goal_width) <= 1e-6
             and (
                 self.goal_tcp_tf is None
                 or self.wrs.np.allclose(self.tcp.tf, self.goal_tcp_tf, atol=1e-4)
@@ -161,7 +184,7 @@ class VirtualState:
         return SceneData(
             robot=RobotData(pose=self.pose, kinematics=self.kinematics),
             objects={name: obj.model_copy(deep=True) for name, obj in self.objects.items()},
-            facts={"calibration": "wrs2-lite6-v1", "collision_checked": False},
+            facts={"calibration": "wrs2-ur7e-dh50-v1", "collision_checked": False},
         )
 
 
@@ -196,12 +219,15 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
             count = max(2, round(duration / 0.02) + 1)
             if skill == "move_relative":
                 await call(model.begin_relative, (args.dx, args.dy, args.dz), count)
+            elif skill == "set_gripper":
+                await call(model.begin_gripper, args.command, count)
             else:
                 await call(model.begin, args.pose, count)
             for index in range(1, count):
                 if stop.is_set():
                     return False
-                state.pose = None
+                if skill != "set_gripper":
+                    state.pose = None
                 # One in-flight FK only. No model object is read by the control thread.
                 state.kinematics = await call(model.step, index)
                 state.version += 1
@@ -215,8 +241,8 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
             if stop.is_set():
                 return False
             verified = await call(model.verify)
-            if not stop.is_set() and verified:
-                state.pose = args.pose if skill == "move_named_pose" else None
+            if not stop.is_set() and verified and skill == "move_named_pose":
+                state.pose = args.pose
             return verified
         except SkillFailure:
             # An unreachable target has caused no model update.
@@ -235,7 +261,7 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
         close_backend=close,
         skills={
             name: replace(SKILLS[name], handler=partial(advance, name))
-            for name in ("observe", "move_named_pose", "move_relative")
+            for name in ("observe", "move_named_pose", "move_relative", "set_gripper")
         },
         duration=0,  # This backend advances itself; no Mock delay before motion.
         backend="wrs",
@@ -244,7 +270,7 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
             "stop_scope": "virtual_fk_boundary",
             "controller_flush": False,
             "unsupported": {
-                "pick": "Bare Lite6 profile has no validated gripper/grasp scene.",
+                "pick": "DH50 jaw is modeled, but there is no validated grasp/contact scene.",
                 "place": "No verified held-object/contact state.",
                 "verify": "Object placement verifier requires a grasp scene.",
                 "hardware": "No verified controller stop/flush/state feedback.",
@@ -259,7 +285,7 @@ def probe_virtual():
     from importlib.metadata import version
 
     wrs = load_wrs()
-    robot = wrs.xarm_lite6.Lite6()
+    robot, gripper = wrs.ur_ur7e.ur7e_with_gripper()
     transforms = robot.fk()
     return {
         "import": "PASS",
@@ -268,6 +294,8 @@ def probe_virtual():
         },
         "module": wrs.__file__,
         "robot_class": type(robot).__name__,
+        "gripper_class": type(gripper).__name__,
+        "gripper_jaw_range": gripper.jaw_range.tolist(),
         "fk_shape": list(transforms.shape),
         "qs": robot.qs.tolist(),
         "tcp_name": "flange",

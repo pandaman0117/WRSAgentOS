@@ -15,8 +15,8 @@ HoloAgent、RPent、DimOS 是设计参考，不是本项目运行依赖。Zenoh 
 | zenohd | 官方发行二进制，版本与校验值写清单 | 默认部署必需 | 不作为 submodule；只在回环地址启动本地 router |
 | pydantic | Python 包，v2 系兼容版本由测试锁定 | 核心必需 | 消息/Skill 参数边界校验 |
 | asyncio、sqlite3、dataclasses、graphlib、argparse、tomllib | Python 标准库 | 按使用需要 | 不为同样的基础功能重复安装框架 |
-| httpx | `glm` 可选依赖及 dev 夹具依赖 | GLM profile 必需 | 0.28.1，直接映射智谱 Chat Completions HTTP；不引入自动工具 Runner |
-| anthropic | 后续可选依赖组 | V1 非必需 | Claude 使用原生协议适配，不能假设与 GLM 完全同构 |
+| httpx | `llm` 可选依赖及 dev 夹具依赖 | 在线模型 profile 必需 | 0.28.1，直接映射 OpenAI Chat/Responses 与 Anthropic Messages 三种 HTTP 协议；不引入自动工具 Runner |
+| openai、anthropic、litellm、langchain | 不引入 | V1 非必需 | 三种协议由本项目的小型适配直接收发 JSON；Claude 走原生 Messages 格式，不假设与 Chat 同构 |
 | sounddevice、sherpa-onnx | `speech` 可选依赖组 | 真实语音 profile 必需 | 软件包而非 submodule；锁定与目标设备兼容的版本 |
 | ASR/KWS/VAD/TTS 权重 | 显式资产清单与本地缓存 | 按语音 profile | 固定 revision、checksum、来源、体积和授权；不放主 Git，不自动下载 |
 | numpy、WGPU、MuJoCo、WRS 相关依赖 | 独立 WRS 环境或可选组 | WRS profile 按需 | 不把 README 中所有可选依赖灌入 core |
@@ -80,7 +80,7 @@ PowerShell 安装脚本只覆盖 Windows x64。Linux/macOS 需准备对应平台
 
 bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，再同步至 .local/deps。router 固定官方 1.9.0 并校验 SHA256。脚本可重跑，不更新 WRS 远程指针、不修改共享环境。
 
-当前已实现 core/dev/glm；httpx 同时列入 dev 以运行无网络的协议夹具。部署仅 core 不含 httpx。speech 在真实接入时加入 pyproject 并重新生成锁文件。没有空 extras、默认付费调用或权重下载。表中未接入项仍是后续合同。
+当前已实现 core/dev/llm（2026-09-23 由 glm 改名）；httpx 同时列入 dev 以运行无网络的协议夹具。部署仅 core 不含 httpx。speech 在真实接入时加入 pyproject 并重新生成锁文件。没有空 extras、默认付费调用或权重下载。表中未接入项仍是后续合同。
 
 ## 6. 什么时候才增加第二个 submodule
 
@@ -91,6 +91,8 @@ bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，
 参考仓库中的 Skill 文档不能不经审查自动成为模型的高权限指令。少量源码复用记录来源与授权。机器人模型网格、数据和模型权重的授权可能不同于顶层代码许可证，应分别登记；本文件不是对未审计资产的商用授权承诺。
 
 2026-09-17：GLM 使用 httpx 异步客户端直接发送 OpenAI 兼容 JSON；原计划 openai SDK 为候选，未引入。可运行 `./scripts/bootstrap.ps1 -Extra glm`；锁文件由 uv 0.12.15 重新生成，不修改共享 Python。只有非流式/auto 工具模式经离线协议测试，真实账号模型及 GLM TTS 未验证。
+
+2026-09-23：模型适配由 GLM 专用改为按线协议通用（openai_chat、openai_responses、anthropic_messages），变量统一为 `LLM_*`。extra `glm` 改名 `llm`，依赖内容不变（仍只有 httpx >=0.28,<0.29）；uv.lock 由项目本地 uv 0.12.15 `uv lock` 重新生成，差异只有 extra 名称三行。安装命令改为 `./scripts/bootstrap.ps1 -Extra llm`。没有新增厂商 SDK。三种协议仅经手写离线夹具测试，未对任何真实账号联网验证。
 
 M3 科学包路径补充：指定 venv 的 pyvenv.cfg 设置 include-system-site-packages=true。WRS adapter 仅在自己的进程向 sys.path 后部追加该 venv 与基础解释器的 site-packages；项目锁定 core 包优先，固定 WRS submodule 位于前部并检查真实模块路径。不执行 .pth、不升级或修改共享包。M3 干净机器科学依赖重建仍未验证。
 

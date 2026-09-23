@@ -8,10 +8,17 @@ from wrs_agent.bindings import load_bindings
 from wrs_agent.errors import AgentError
 from wrs_agent.runtime import validate_plan
 from wrs_agent.schemas import CapabilitySnapshot, Empty, Plan, Step
-from wrs_agent.skills import SKILLS, Skill, SkillSpec, VirtualWorld, lookup_skills
+from wrs_agent.skills import (
+    SKILLS,
+    Skill,
+    SkillSpec,
+    VirtualWorld,
+    lookup_skills,
+    validate_skill,
+)
 
 BINDINGS = load_bindings()[1]
-MOTION = ("observe", "move_named_pose", "move_relative")
+MOTION = ("observe", "move_named_pose", "move_relative", "set_gripper")
 
 
 def caps():
@@ -22,7 +29,7 @@ def caps():
 
 
 def motion_caps():
-    """WRS 节点实际注册的三个技能。"""
+    """WRS 节点实际注册的技能。"""
     return {"wrs": CapabilitySnapshot(skills={n: SKILLS[n].spec.version for n in MOTION})}
 
 
@@ -39,6 +46,17 @@ def test_relative_motion_describes_all_six_directions():
     """方向语义必须在 description 里，那是模型真正会读的地方。"""
     description = SKILLS["move_relative"].spec.description
     assert all(word in description for word in ("up/down", "left/right", "forward/back"))
+
+
+def test_gripper_contract_accepts_only_open_or_close_and_denies_grasp_claims():
+    for command in ("open", "close"):
+        assert validate_skill("set_gripper", 1, {"command": command}).command == command
+    for bad in ({}, {"command": "half"}, {"command": "open", "width": 0.01}):
+        with pytest.raises(AgentError, match="invalid_arguments"):
+            validate_skill("set_gripper", 1, bad)
+    spec = SKILLS["set_gripper"].spec
+    assert spec.resources == ["arm"] and spec.verification == "wrs_fk"
+    assert "never confirms contact or holding" in spec.description
 
 
 def test_registry_is_returned_by_copy():

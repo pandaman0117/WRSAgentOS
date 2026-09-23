@@ -120,7 +120,7 @@ class LocalStack:
     ):
         if backend not in {"mock", "wrs"}:
             raise ValueError("unsupported_backend")
-        if model_provider not in {"mock", "glm"} or (model_provider == "glm" and not live_model):
+        if model_provider not in {"mock", "llm"} or (model_provider == "llm" and not live_model):
             raise ValueError("invalid_model_provider_or_missing_live_opt_in")
         if tts_backend not in {"mock", "qwen"}:
             raise ValueError("unsupported_tts_backend")
@@ -187,15 +187,22 @@ class LocalStack:
         self.logs = []
         self.directory = ROOT / ".local/runs" / self.env_id
 
+    def node_env(self, command):
+        env = os.environ.copy()
+        env["WRS_AGENT_TOKEN"] = self.token
+        if command[0] in {str(p) for p in (self.tts_python, self.asr_python) if p}:
+            # The speech environments pin conflicting Transformers versions; an
+            # inherited PYTHONPATH (e.g. IDE source roots) would shadow their own.
+            env.pop("PYTHONPATH", None)
+        return env
+
     def _spawn(self, name, command):
         log = (self.directory / f"{name}.log").open("wb")
         self.logs.append(log)
-        env = os.environ.copy()
-        env["WRS_AGENT_TOKEN"] = self.token
         process = subprocess.Popen(
             command,
             cwd=ROOT,
-            env=env,
+            env=self.node_env(command),
             stdout=log,
             stderr=subprocess.STDOUT,
             creationflags=NO_WINDOW,
@@ -255,8 +262,8 @@ class LocalStack:
             result.extend(["--backend", self.backend])
             if self.scene_path is not None:
                 result.extend(["--scene", str(self.scene_path)])
-        if role == "agent" and self.model_provider == "glm":
-            result.extend(["--model-provider", "glm", "--live-model"])
+        if role == "agent" and self.model_provider == "llm":
+            result.extend(["--model-provider", "llm", "--live-model"])
         if self.deferred and role == "agent":
             result.append("--deferred-planner")
         if role == "tts":

@@ -1,4 +1,4 @@
-"""Actual GLM HTTP adapter with offline responses; action traffic uses real Zenoh."""
+"""Actual HTTP model adapters with offline responses; action traffic uses real Zenoh."""
 
 import asyncio
 import json
@@ -11,30 +11,42 @@ from conftest import eventually, submit_request
 from wrs_agent.bindings import load_bindings
 from wrs_agent.nodes.agent import register_runtime
 from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
+from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
 from wrs_agent.processes import LocalStack
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import ActionRequest, ControlRequest, new_id
 
 pytestmark = pytest.mark.zenoh
-FIXTURE = Path(__file__).parents[2] / "examples/models/fixtures/glm_tool_call.json"
+FIXTURES = Path(__file__).parents[2] / "examples/models/fixtures"
+FIXTURE = FIXTURES / "openai_chat_tool_call.json"
+CONFIG = LLMConfig(model="fixture", base_url="https://model.invalid/v1")
+PROTOCOLS = {
+    # Protocol -> (reply fixture, where the request carries the goal and context).
+    "openai_chat": ("openai_chat_tool_call.json", lambda body: body["messages"][1]["content"]),
+    "openai_responses": ("openai_responses_function_call.json", lambda body: body["input"]),
+    "anthropic_messages": ("anthropic_tool_use.json", lambda body: body["messages"][0]["content"]),
+}
 
 
-async def test_glm_plan_runs_on_remote_mock_nodes():
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+async def test_model_plan_runs_on_remote_mock_nodes(protocol):
+    fixture, user_content = PROTOCOLS[protocol]
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=0.03) as stack:
 
         def reply(request):
-            import json
-
-            body = json.loads(request.content)
-            context = json.loads(body["messages"][1]["content"])["context"]
+            context = json.loads(user_content(json.loads(request.content)))["context"]
             assert all("lease_id" not in state for state in context["world"].values())
-            assert context["skills"]
-            assert all("name: robot" in skill["instructions"] for skill in context["skills"])
+            # Each skill carries its own package's instructions; speak lives in speech.
+            packages = {s["name"]: s["instructions"].split("\n")[1] for s in context["skills"]}
+            assert packages.pop("speak") == "name: speech"
+            assert packages and set(packages.values()) == {"name: robot"}
             assert all("node" not in skill for skill in context["skills"])
-            return httpx.Response(200, content=FIXTURE.read_bytes())
+            return httpx.Response(200, content=(FIXTURES / fixture).read_bytes())
 
-        client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(reply))
+        client = LLMClient(
+            CONFIG.model_copy(update={"protocol": protocol}),
+            transport=httpx.MockTransport(reply),
+        )
         nodes = {
             "wrs": stack.system.clients["wrs"],
             "tts": stack.system.clients["tts"],
@@ -48,12 +60,16 @@ async def test_glm_plan_runs_on_remote_mock_nodes():
             await eventually(lambda: runtime.snapshot(), lambda s: s["state"] == "SUCCEEDED")
             assert (await nodes["wrs"].snapshot()).data.objects["A"].location == "B"
             assert runtime.planner_calls == 1
+            planning = runtime.snapshot()["last_planning"]
+            assert 0 < planning["model_s"] <= planning["total_s"]
+            # Chat names these prompt/completion tokens; the overview shows one set of names.
+            assert (planning["input_tokens"], planning["output_tokens"]) == (30, 70)
         finally:
             await runtime.close()
             await client.aclose()
 
 
-async def test_pending_glm_does_not_block_queries_or_control():
+async def test_pending_model_does_not_block_queries_or_control():
     gate, entered = asyncio.Event(), asyncio.Event()
 
     async def respond(request):
@@ -62,7 +78,7 @@ async def test_pending_glm_does_not_block_queries_or_control():
         return httpx.Response(200, content=FIXTURE.read_bytes())
 
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=2.0) as stack:
-        client = GLMClient(GLMConfig(model="fixture"), transport=httpx.MockTransport(respond))
+        client = LLMClient(CONFIG, transport=httpx.MockTransport(respond))
         nodes = {
             "wrs": stack.system.clients["wrs"],
             "tts": stack.system.clients["tts"],
@@ -139,7 +155,7 @@ async def test_pending_glm_does_not_block_queries_or_control():
 
 
 @pytest.mark.parametrize("fault", ["partial", "authority", "cycle"])
-async def test_invalid_glm_proposal_never_reaches_action_nodes(fault):
+async def test_invalid_model_proposal_never_reaches_action_nodes(fault):
     body = json.loads(FIXTURE.read_text(encoding="utf-8"))
     function = body["choices"][0]["message"]["tool_calls"][0]["function"]
     if fault == "partial":
@@ -152,8 +168,8 @@ async def test_invalid_glm_proposal_never_reaches_action_nodes(fault):
             proposal["plan"]["steps"][0]["depends_on"] = ["verify"]
         function["arguments"] = json.dumps(proposal)
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=0.01) as stack:
-        model = GLMClient(
-            GLMConfig(model="fixture"),
+        model = LLMClient(
+            CONFIG,
             transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
         )
         nodes = {
@@ -176,10 +192,10 @@ async def test_invalid_glm_proposal_never_reaches_action_nodes(fault):
             await model.aclose()
 
 
-async def test_glm_failure_keeps_safe_provider_code_in_planning_result():
+async def test_model_failure_keeps_safe_provider_code_in_planning_result():
     async with LocalStack(bindings="configs/actions.toml", duration=0.01) as stack:
-        model = GLMClient(
-            GLMConfig(model="fixture"),
+        model = LLMClient(
+            CONFIG,
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(401, text="private-provider-body")
             ),
@@ -192,7 +208,7 @@ async def test_glm_failure_keeps_safe_provider_code_in_planning_result():
             await runtime.planning
             result = runtime.goal_status("unauthorized-model")
             assert result["state"] == "FAILED"
-            assert result["error"]["code"] == "glm_http_401"
+            assert result["error"]["code"] == "llm_http_401"
             assert result["error"]["stage"] == "planning"
             assert "private-provider-body" not in str(result)
             assert not runtime.action_history

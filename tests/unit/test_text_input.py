@@ -80,7 +80,9 @@ async def test_interrupt_planning_without_task_rejects_late_result(make_env):
         assert receipt["task_id"] is None and receipt["accepted"]
         assert runtime.goal_status("planning")["state"] == "STALE"
         model.gate.set()
-        await runtime.planning
+        # The model call is dropped, so no late reply can arrive to be checked at all.
+        await asyncio.gather(runtime.planning, return_exceptions=True)
+        assert runtime.planning.cancelled()
         assert env.executions == 0 and runtime.task_id is None
     finally:
         await runtime.close()

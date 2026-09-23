@@ -117,8 +117,10 @@ class NodeRegistry:
             if name not in self._initialized:
                 # history=True asks Zenoh for existing tokens. Bound only the initial wait;
                 # later absence/presence is driven by native events, never a local expiry.
+                # Sessions opened one per suffix receive history in turn, the last most of a
+                # second after connect, so a present node only costs its own arrival time.
                 try:
-                    async with asyncio.timeout(0.3):
+                    async with asyncio.timeout(1.0):
                         await self._arrived[name].wait()
                 except TimeoutError:
                     pass

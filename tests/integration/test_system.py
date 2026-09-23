@@ -113,18 +113,18 @@ async def test_direct_nodes_survive_agent_exit_and_registry_rejects_offline_prov
 
 
 async def test_runtime_resolves_renamed_node_from_configuration(tmp_path):
-    text = DEFAULT.read_text(encoding="utf-8").replace("nodes.wrs", "nodes.wrs_lite6")
-    text = text.replace('= "wrs"', '= "wrs_lite6"').replace('type = "wrs_lite6"', 'type = "wrs"')
+    text = DEFAULT.read_text(encoding="utf-8").replace("nodes.wrs", "nodes.wrs_ur7e")
+    text = text.replace('= "wrs"', '= "wrs_ur7e"').replace('type = "wrs_ur7e"', 'type = "wrs"')
     path = tmp_path / "nodes.toml"
     path.write_text(text, encoding="utf-8")
     async with LocalStack(bindings=path, duration=0.05) as stack:
         path.write_text("not valid TOML", encoding="utf-8")
         system = stack.system
-        assert (await system.nodes())["wrs_lite6"]["ready"]
+        assert (await system.nodes())["wrs_ur7e"]["ready"]
         task = await system.start(step("move_named_pose", pose="B"), step("speak", text="parallel"))
         assert (await task.wait()).state == "SUCCEEDED"
         world = await system.snapshot()
-        assert world.data.robot.pose == "B" and world.node_id == "wrs_lite6"
+        assert world.data.robot.pose == "B" and world.node_id == "wrs_ur7e"
         task = await system.start(step("move_named_pose", pose="C"))
         result = await system.agent.request(
             "request/task/cancel", {"request_id": new_id(), "task_id": task.id}, control=True

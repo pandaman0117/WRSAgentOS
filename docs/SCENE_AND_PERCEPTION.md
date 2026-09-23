@@ -10,8 +10,8 @@ WRS 源码为 third_party/wrs，提交 2bb014b747833c2fd9345115fbe26ffb11376f20�
 
 | 当前字段 | WRS 对应接口 | 含义 |
 |---|---|---|
-| kinematics.qs | robot.qs | 当前 Lite6 六个关节值，单位 rad |
-| kinematics.tcp_name | robot.tcp("flange").name | 报告的是哪个工具坐标系；当前裸 Lite6 使用 flange |
+| kinematics.qs | robot.qs | 当前 UR7E 六个关节值，单位 rad |
+| kinematics.tcp_name | robot.tcp("flange").name | 报告的是哪个工具坐标系；当前裸 UR7E 使用 flange |
 | kinematics.tcp_pos | robot.tcp(name).pos | TCP 在 world 中的位置，单位 m |
 | kinematics.tcp_rotmat | robot.tcp(name).rotmat | TCP 在 world 中的 3×3 旋转矩阵 |
 | kinematics.frame_id | 本项目消息元数据 | 上述位置和朝向用哪个坐标系表达；当前固定 world |
@@ -19,7 +19,7 @@ WRS 源码为 third_party/wrs，提交 2bb014b747833c2fd9345115fbe26ffb11376f20�
 
 旧 joints / tip_position 已移除，服务、客户端与 viewer 应同步更新并重启；不提供将连杆末端偷偷当成 TCP 的兼容字段。NodeSnapshot 外层的启动实例、控制版本和执行状态保留，消息封装与 Zenoh v4 路径未变；本次运动学数据字段是不兼容的 API 变更。
 
-旧实现直接读取 gl_lnk_tfarr[-1]，对当前零工具偏移的 Lite6 与 flange TCP 恰好相同。新实现读取具名 TCP 的 tf，同一个快照同时取位置和朝向；相对移动的目标、IK 与到位检查都使用同一 TCP。这样加工具偏移时，计算的仍是工具点。TCP 名称回答“机器人上的哪个点”，frame_id 回答“坐标是相对于哪里”，两者不能互相替代。
+旧实现直接读取 gl_lnk_tfarr[-1]，对当时零工具偏移的 Lite6 与 flange TCP 恰好相同。新实现读取具名 TCP 的 tf，同一个快照同时取位置和朝向；相对移动的目标、IK 与到位检查都使用同一 TCP。这样加工具偏移时，计算的仍是工具点。TCP 名称回答“机器人上的哪个点”，frame_id 回答“坐标是相对于哪里”，两者不能互相替代。
 
 ## SceneData 作为 snapshot().data 返回
 

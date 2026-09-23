@@ -14,9 +14,9 @@ from wrs_agent.skills import validate_skill
     [
         {},
         {"dz": 0.0},
-        {"dx": 0.051},
-        {"dy": -0.051},
-        {"dx": 0.04, "dy": 0.04},
+        {"dx": 0.101},
+        {"dy": -0.101},
+        {"dx": 0.08, "dy": 0.08},
         {"dz": float("nan")},
         {"dz": float("inf")},
         {"dz": "0.02"},
@@ -29,8 +29,8 @@ def test_relative_move_rejects_invalid_or_unbounded_offset(args):
 
 
 def test_relative_move_has_meter_defaults_and_combined_bound():
-    args = validate_skill("move_relative", 1, {"dx": 0.03, "dz": 0.04})
-    assert (args.dx, args.dy, args.dz) == (0.03, 0.0, 0.04)
+    args = validate_skill("move_relative", 1, {"dx": 0.06, "dz": 0.08})
+    assert (args.dx, args.dy, args.dz) == (0.06, 0.0, 0.08)
 
 
 async def test_unreachable_ik_is_effect_free_failure_and_deduplicated(tmp_path, monkeypatch):

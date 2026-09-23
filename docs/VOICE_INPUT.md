@@ -57,7 +57,7 @@ with launch() as system:
 | `改放到 C`、`完成后再……` | clarify；修改目标需先取消并确认结束，再 start；追加使用显式 enqueue |
 | 其他完整文本 | 提交 Planner；是否产生任务由规划和 Runtime 校验决定 |
 
-Mock Planner 只识别严格转移模板（如 `put A in B`）与明确的 home/回原位指令；其余返回 CLARIFY。GLM 使用同一后续校验，不负责签发执行权限。VAD 表示检测到声音，不等于停止指令。
+Mock Planner 只识别严格转移模板（如 `put A in B`）与明确的 home/回原位指令；其余返回 CLARIFY。在线模型使用同一后续校验，不负责签发执行权限。VAD 表示检测到声音，不等于停止指令。
 
 ## 停止到底做什么
 

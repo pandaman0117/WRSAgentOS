@@ -1,11 +1,11 @@
-"""在线 GLM → Planner → Runtime → 独立 WRS 节点 → 真实 Lite6 模型。"""
+"""在线模型 → Planner → Runtime → 独立 WRS 节点 → 真实 UR7E 模型。"""
 
 import asyncio
 from pathlib import Path
 
 from wrs_agent.bindings import load_bindings
 from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.glm import GLMClient, GLMConfig, GLMError
+from wrs_agent.planner.providers.llm import LLMClient, LLMConfig, LLMError
 from wrs_agent.processes import LocalStack
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, new_id
@@ -15,11 +15,11 @@ GOAL = "先移动到命名姿态 B，然后在世界坐标系向上移动 2 厘�
 
 
 async def main():
-    # 环境变量提供凭据；本脚本的 Runtime 使用真实 GLM，不启动另一份 Agent。
+    # LLM_* 环境变量选择协议、端点与模型；本脚本的 Runtime 使用在线模型，不启动另一份 Agent。
     try:
-        model = GLMClient(GLMConfig.from_env(), live_model=True)
-    except GLMError as exc:
-        raise SystemExit(f"GLM 配置错误：{exc.error.message}") from None
+        model = LLMClient(LLMConfig.from_env(), live_model=True)
+    except LLMError as exc:
+        raise SystemExit(f"模型配置错误：{exc.error.message}") from None
     try:
         async with LocalStack(backend="wrs", bindings=CONFIG) as stack:
             runtime = Runtime(

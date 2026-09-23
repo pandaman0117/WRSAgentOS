@@ -25,16 +25,20 @@ class MoveArgs(Boundary):
 
 
 class RelativeMoveArgs(Boundary):
-    dx: float = Field(default=0.0, ge=-0.05, le=0.05, description="World X displacement in meters")
-    dy: float = Field(default=0.0, ge=-0.05, le=0.05, description="World Y displacement in meters")
-    dz: float = Field(default=0.0, ge=-0.05, le=0.05, description="World Z displacement in meters")
+    dx: float = Field(default=0.0, ge=-0.1, le=0.1, description="World X displacement in meters")
+    dy: float = Field(default=0.0, ge=-0.1, le=0.1, description="World Y displacement in meters")
+    dz: float = Field(default=0.0, ge=-0.1, le=0.1, description="World Z displacement in meters")
 
     @model_validator(mode="after")
     def bounded_displacement(self):
         distance_squared = self.dx**2 + self.dy**2 + self.dz**2
-        if not 0 < distance_squared <= 0.05**2 + 1e-12:
-            raise ValueError("displacement_must_be_nonzero_and_at_most_5cm")
+        if not 0 < distance_squared <= 0.1**2 + 1e-12:
+            raise ValueError("displacement_must_be_nonzero_and_at_most_10cm")
         return self
+
+
+class GripperArgs(Boundary):
+    command: Literal["open", "close"]
 
 
 class PickArgs(Boundary):
@@ -104,6 +108,11 @@ def move_named_pose(world, args, stop, progress):
 
 def move_relative(world, args, stop, progress):
     # This contract requires an actual kinematic backend; Mock does not advertise it.
+    raise ValueError("kinematic_backend_required")
+
+
+def set_gripper(world, args, stop, progress):
+    # Jaw state must be read back from a gripper model; Mock does not advertise it.
     raise ValueError("kinematic_backend_required")
 
 
@@ -199,10 +208,18 @@ SKILLS = {
             "move_relative",
             RelativeMoveArgs,
             move_relative,
-            "Offset the flange in world XYZ meters at most 5 cm: up/down is ±Z, "
+            "Offset the flange in world XYZ meters at most 10 cm: up/down is ±Z, "
             "left/right is ±Y, forward/back is ±X; preserve endpoint orientation, "
             "joint-interpolated path without collision checking",
             preconditions=("reachable_target",),
+            verification="wrs_fk",
+        ),
+        _skill(
+            "set_gripper",
+            GripperArgs,
+            set_gripper,
+            "Fully open or fully close the parallel gripper jaw; the arm does not move. "
+            "Closing is jaw motion only: it never confirms contact or holding an object",
             verification="wrs_fk",
         ),
         _skill(

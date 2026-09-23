@@ -14,14 +14,14 @@ if __name__ == "__main__":
     use_local_token("wrs")
     wrs = load_wrs()
     world = wrs.wvw.World(
-        cam_pos=(0.9, 0.9, 0.7),
-        cam_lookat_pos=(0, 0, 0.25),
+        cam_pos=(1.8, 1.4, 1.2),
+        cam_lookat_pos=(0.3, 0, 0.35),
         port=VIEWER_PORT,
         hz=10,
         auto_start_hub=False,
     )
-    world.set_caption("WRS Lite6 — 节点状态")
-    robot = wrs.xarm_lite6.Lite6()
+    world.set_caption("WRS UR7E — 节点状态")
+    robot, gripper = wrs.ur_ur7e.ur7e_with_gripper()
     robot.add_to_scene(world.scene)
     wrs.wssop.frame().add_to_scene(world.scene)
 
@@ -30,6 +30,7 @@ if __name__ == "__main__":
         if initial.data.robot.kinematics is None or not initial.data.robot.kinematics.valid:
             raise RuntimeError("WRS 节点没有有效的关节状态。")
         robot.fk(initial.data.robot.kinematics.qs)
+        gripper.set_opening(initial.data.robot.kinematics.gripper_width)
         displayed = {}
         sync_scene_objects(wrs, world.scene, initial.data.objects, displayed)
 
@@ -42,6 +43,7 @@ if __name__ == "__main__":
                 raise RuntimeError("WRS 关节状态无法确认，停止显示。")
             # 只更新显示模型；运动命令由 06_control_arm 或 voice/06_push_to_talk 发给执行节点。
             robot.fk(state.qs)
+            gripper.set_opening(state.gripper_width)
             sync_scene_objects(wrs, world.scene, snapshot.data.objects, displayed)
 
         world.schedule_interval(update, 0.1)

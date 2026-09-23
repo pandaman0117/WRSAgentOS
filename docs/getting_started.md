@@ -90,7 +90,7 @@ else:
     print(planned.state, planned.reason)
 ```
 
-第一次等规划结果，第二次等执行结果。此例使用确定的 home 模板；Planner 也可能回答或要求澄清。在线 GLM 见 [模型示例](../examples/README.md#模型)。缓存只缓存计划结构，不保存执行授权，完整行为由测试覆盖。
+第一次等规划结果，第二次等执行结果。此例使用确定的 home 模板；Planner 也可能回答或要求澄清。在线模型见 [模型示例](../examples/README.md#模型)。缓存只缓存计划结构，不保存执行授权，完整行为由测试覆盖。
 
 ## 接入自己的节点
 
@@ -98,6 +98,6 @@ else:
 
 再看 [节点与技能](../examples/README.md#nodes)：合同在 `greet_skill.py`，执行器在 `01_start_speaker.py`，调度器在 `02_start_agent.py`，调用与取消各有文件。地址、节点名和绑定直接写在代码或 TOML 中，没有命令行模式切换。
 
-WRS 同样使用动作接口：[虚拟运动](../examples/wrs/01_move.py)、[取消](../examples/wrs/02_cancel.py)、[取消后接收新动作](../examples/wrs/03_new_action_after_cancel.py)。另有 [方向移动](../examples/wrs/04_move_relative.py) 和 [独立节点及 viewer](../examples/README.md#wrs-虚拟机器人)。它使用真实 Lite6 模型计算 IK/FK，不代表已经接通硬件或实现抓放。
+WRS 同样使用动作接口：[虚拟运动](../examples/wrs/01_move.py)、[取消](../examples/wrs/02_cancel.py)、[取消后接收新动作](../examples/wrs/03_new_action_after_cancel.py)。另有 [方向移动](../examples/wrs/04_move_relative.py) 和 [独立节点及 viewer](../examples/README.md#wrs-虚拟机器人)。它使用真实 UR7E 模型计算 IK/FK，不代表已经接通硬件或实现抓放。
 
 需要修改内部实现时，再读 [完整调用链与 context](task_handles.md)、[错误合同](errors_and_versions.md)、[开发交接](DEVELOPMENT.md)。全部文件与预期输出见 [示例目录](../examples/README.md)。

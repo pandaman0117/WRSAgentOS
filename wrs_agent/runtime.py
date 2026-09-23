@@ -1,6 +1,7 @@
 """Bounded DAG scheduling across explicitly bound nodes, with one Planner."""
 
 import asyncio
+import time
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ from itertools import combinations
 from wrs_agent.cache import PlanCache
 from wrs_agent.errors import AgentError, error_info, from_exception
 from wrs_agent.nodes.actions import ActionProvider
-from wrs_agent.planner import PlanDecision, Planner, PlanRequest
+from wrs_agent.planner import PlanDecision, Planner, PlanRequest, token_counts
 from wrs_agent.schemas import (
     TERMINAL,
     ActionState,
@@ -127,6 +128,8 @@ class Runtime:
         self.closed = False
         self.node_locks = {node: asyncio.Lock() for node in nodes}
         self.planner_calls = 0
+        # Spans of the latest decision, for display only; never a timeout or safety input.
+        self.last_planning = {}
         self.planning = None
         self.planning_request_id = None
         self.planning_state = "IDLE"
@@ -226,6 +229,7 @@ class Runtime:
             "planning": self.planning_state,
             "planning_request_id": self.planning_request_id,
             "planner_calls": self.planner_calls,
+            "last_planning": dict(self.last_planning),
             "queued": len(self.queued),
             "cache_hit": self.cache.last_hit,
             "cache_hits": self.cache.hits,
@@ -363,6 +367,8 @@ class Runtime:
 
     async def _plan(self, goal, request_id, was_running):
         worlds = {}
+        started = time.perf_counter()
+        self.last_planning = {}
         try:
             capabilities = await self._capabilities()
             worlds = {
@@ -376,11 +382,21 @@ class Runtime:
                 skills=[spec.model_dump() for spec in lookup_skills(capabilities, self.bindings)],
             )
             cached = self.cache.lookup(goal, worlds, capabilities, self.bindings)
+            called = time.perf_counter()
             if cached is None:
                 self.planner_calls += 1
                 decision = await self.planner.plan(request)
+                usage = token_counts(getattr(self.planner, "last_usage", None) or {})
             else:
                 decision = PlanDecision(kind="execute", plan=cached)
+                usage = {}
+            done = time.perf_counter()
+            if self._planning_current(request_id):  # A replaced goal's late reply is not shown.
+                self.last_planning = {
+                    "total_s": round(done - started, 3),  # Preflight snapshots plus the model.
+                    "model_s": round(done - called, 3) if cached is None else None,
+                    **usage,
+                }
             if not await self._plan_valid(request_id, worlds):
                 return
             if decision.kind != "execute":
@@ -806,6 +822,10 @@ class Runtime:
         self.planning_request_id = None
         if self.planning_state == GoalState.WAITING:
             self.planning_state = GoalState.STALE
+            # WAITING means this call has not started a task, so only the model request is
+            # dropped; its reply would be discarded anyway and would keep goal() busy until then.
+            if self.planning and not self.planning.done():
+                self.planning.cancel()
         self._clear_queue()
         if self.task and self.state in {TaskState.RUNNING, TaskState.CANCELLING, TaskState.UNKNOWN}:
             result = self._begin_cancel(self.task)

@@ -138,4 +138,4 @@ rtf 越过 1 之后流式播放才第一次成立，上一节"流式救不了"�
 
 ## 示例目录
 
-[WRS](../examples/wrs/README.md) 仅包含机械臂和查看器；[Voice](../examples/voice/README.md) 包含文字输入、按键收音、循环收音、查看器里按住说话与 GLM 目标；[TTS](../examples/tts/README.md) 提供独立启动播报、调用和取消。收音也可以放进独立 `asr` 节点，由界面远程按键驱动，模型与麦克风故障因此留在那个进程里，合同见 [文本合同](VOICE_INPUT.md)。启动提示是常规 speak 动作，预合成用于模型预热，实际播放用于检查输出设备；播放失败不宣布就绪。
+[WRS](../examples/wrs/README.md) 仅包含机械臂和查看器；[Voice](../examples/voice/README.md) 包含文字输入、按键收音、循环收音、查看器里按住说话与 模型目标；[TTS](../examples/tts/README.md) 提供独立启动播报、调用和取消。收音也可以放进独立 `asr` 节点，由界面远程按键驱动，模型与麦克风故障因此留在那个进程里，合同见 [文本合同](VOICE_INPUT.md)。启动提示是常规 speak 动作，预合成用于模型预热，实际播放用于检查输出设备；播放失败不宣布就绪。

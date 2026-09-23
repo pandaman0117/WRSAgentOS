@@ -82,3 +82,9 @@ capabilities / snapshot / observe / move_named_pose / status / cancel / hold / r
 已实现静态场景纵向切片，接续上节后续方案。固定 WRS 的 wss.Scene.add/remove 管理对象，wssop.box 接受 pos/rotmat/xyz_lengths/rgb/name，SceneObject.pos/rotmat 为世界位姿。适配器工作线程创建真实 Scene、Lite6 和方块；源数据经严格 TOML 校验后，快照中的已实例化物体位姿由 WRS 对象读回。无 geometry/rotmat 或 valid=False 时保留未知数据但不虚构显示实体。
 
 NodeSnapshot.data 现为 SceneData（或 SpeechData），RobotData 位于 data.robot。独立 viewer 只操作自己的 SceneObject，支持跟随快照创建、修改、移除显示对象；当前服务端物体来自启动配置，无在线更新入口。未调用 collider、GraspNet 或真实硬件，碰撞检查仍 False。配置无需依赖 WRS SDK 即可校验，未新增外部依赖。完整合同与示例见 SCENE_AND_PERCEPTION.md。
+
+## 2026-09-24：UR7E 替换 Lite6
+
+旧版 WRS（D:\code\wrs，robot_sim 架构）的 UR7E 机械臂与 DH50 夹爪移植到 third_party/wrs 新架构：`wrs/robots/manipulators/universal_robots/ur7e`（与 ur3 并列，MechStruct + P234X56 解析 IK）和 `wrs/robots/end_effectors/dh/dh50`（GripperMixin，grasp_center 在 z=0.139）。关节原点、轴和零位沿用旧版，旧版关节值可直接复用；旧 flange 偏移位于第 6 轴上，并入最后一个关节，因此 wrist3 连杆坐标系即 flange。旧版 DAE 带交错索引与节点缩放，新版 DAE 读取器不支持，已用 trimesh 烘焙变换转为 STL，超过 1 万面的网格用 open3d 二次误差简化，最大表面偏差 0.22 mm。旧组合机器人（0.3×0.3×0.5 m 底座 + 臂 + Rz(π/2) 安装的 DH50）改为新版的 mount 组合，按 `fr3_with_hand` 惯例由 `ur7e.py` 的 `ur7e_with_gripper()` 提供（底座不属于机器人，不再内置）。wrs 顶层新增 `ur_ur7e`、`dh_dh50` 别名，Lite6 源码与别名保留。
+
+对照：51 组关节角下各连杆与 flange 位姿和旧版差异 ≤ 2.7e-7；随机 200 组目标解析 IK 全部有解，往返误差 ≤ 7.3e-6；DH50 手指与抓取中心位置与旧版一致。适配器改用 `wrs.ur_ur7e.UR7E()`；home 为 UR 常用姿态 [0, -π/2, π/2, -π/2, -π/2, 0]（工具朝下），B/C 重新选在其附近，三处命名姿态的 ±2/±5 cm 方向移动均通过 IK 与到位验证。节点仍为裸臂 flange TCP，未挂夹爪；pick/place、碰撞规划和实机仍 unsupported。运动学采用旧版取整参数（如 d1=0.163），与 UR 官方标定值有毫米级差别，未做实机标定核对。

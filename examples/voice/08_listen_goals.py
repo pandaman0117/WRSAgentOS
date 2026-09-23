@@ -1,4 +1,4 @@
-"""终端二：循环收音，唤醒目标交给 GLM，停止走本地控制；建议使用耳机。"""
+"""终端二：循环收音，唤醒目标交给在线模型，停止走本地控制；建议使用耳机。"""
 
 import asyncio
 from pathlib import Path
@@ -83,7 +83,7 @@ async def main():
         if any(not entry["boot_id"] for entry in nodes.values()) or not all(
             nodes[role]["ready"] for role in ("voice", "agent")
         ):
-            raise RuntimeError("请先启动 07_start_glm_voice.py 并等待就绪。")
+            raise RuntimeError("请先启动 07_start_llm_voice.py 并等待就绪。")
         print("开始收音。说“机器人，移动到 B”；“停止”无需唤醒。Ctrl+C 关闭收音。", flush=True)
         print("每句最多 4 秒，不保存录音；识别期间有短暂收音间隙。", flush=True)
         observer = None
