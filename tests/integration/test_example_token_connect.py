@@ -1,4 +1,4 @@
-"""Run shipped service/client examples with no manually configured credential."""
+"""Check shared credentials with a Mock TTS fixture and the WRS examples."""
 
 import asyncio
 import os
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.zenoh
 @pytest.mark.parametrize(
     "group,service_name,client_name,original_port,original_env,node",
     [
-        ("connect", "01_start_system.py", "02_client.py", "7447", "connect-demo", "tts"),
+        ("tts", "01_start_system.py", "02_client.py", "7447", "connect-demo", "tts"),
         pytest.param(
             "wrs", "05_start_node.py", "06_control_arm.py", "7449", "wrs-demo", "wrs",
             marks=pytest.mark.wrs,
@@ -38,12 +38,13 @@ async def test_service_and_client_generate_and_share_token_without_environment(
     env_id = "auto-token-" + secrets.token_hex(6)
     copies = tmp_path / "examples"
     copies.mkdir()
-    bindings = ROOT / ("configs/tts.toml" if group == "connect" else "examples/wrs/bindings.toml")
+    bindings = ROOT / ("configs/tts.toml" if group == "tts" else "examples/wrs/bindings.toml")
+    source_dir = ROOT / ("tests/fixtures/connect" if group == "tts" else "examples/wrs")
     for filename in (service_name, client_name):
-        source = (ROOT / "examples" / group / filename).read_text(encoding="utf-8")
+        source = (source_dir / filename).read_text(encoding="utf-8")
         source = source.replace(original_port, str(port)).replace(original_env, env_id)
         source = source.replace(
-            'Path(__file__).resolve().parents[2] / "configs/tts.toml"',
+            'Path(__file__).resolve().parents[3] / "configs/tts.toml"',
             repr(str(ROOT / "configs/tts.toml")),
         )
         source = source.replace('Path(__file__).with_name("bindings.toml")', repr(str(bindings)))
@@ -96,8 +97,10 @@ async def test_service_and_client_generate_and_share_token_without_environment(
             endpoint, env_id=env_id, bindings=bindings, _token=token
         ) as connection:
             try:
+                await connection.registry.wait_for(node, timeout=0.5)
                 await connection.clients[node].transport.request("request/health", {}, timeout=0.2)
                 if group == "wrs":
+                    await connection.registry.wait_for(role="agent", timeout=0.5)
                     await connection.agent.request("request/task/status", {}, timeout=0.2)
                 return True
             except TimeoutError:
@@ -135,7 +138,7 @@ async def test_service_and_client_generate_and_share_token_without_environment(
                 endpoint, env_id=env_id, bindings=bindings, _token=token
             ) as observer:
                 snapshot = await observer.snapshot(node)
-                if group == "connect":
+                if group == "tts":
                     assert snapshot.data.completed == 1
                 else:
                     assert snapshot.data.robot.kinematics.valid

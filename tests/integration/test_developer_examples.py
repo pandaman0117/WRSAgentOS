@@ -54,19 +54,19 @@ async def stop_service(task):
         await task
 
 
-async def test_persistent_system_example_and_separate_client(monkeypatch, tmp_path):
+async def test_persistent_mock_service_and_separate_client(monkeypatch, tmp_path):
     monkeypatch.setenv("WRS_AGENT_TOKEN", secrets.token_urlsafe(32))
     assert not port_open(7447), "Example port already in use; leave that service untouched"
-    entry = runpy.run_path(str(ROOT / "examples/connect/01_start_system.py"))
+    entry = runpy.run_path(str(ROOT / "tests/fixtures/connect/01_start_system.py"))
     server = asyncio.create_task(entry["main"]())
     try:
         await eventually(lambda: port_open(7447), bool, timeout=10)
         async with System.connect(
             "tcp/127.0.0.1:7447", env_id="connect-demo", bindings="configs/tts.toml"
         ) as observer:
-            await wait_ready(observer.clients["tts"].transport, "request/health")
+            await observer.registry.wait_for("tts")
             boot = (await observer.snapshot("tts")).boot_id
-            output = await run_client("examples/connect/02_client.py", tmp_path)
+            output = await run_client("tests/fixtures/connect/02_client.py", tmp_path)
             assert "SUCCEEDED" in output
             snapshot = await observer.snapshot("tts")
             assert snapshot.boot_id == boot and snapshot.data.completed == 1
@@ -113,8 +113,8 @@ async def test_custom_node_and_skill_run_from_another_working_directory(monkeypa
         buses.append(speaker)
         agent = Transport(f"tcp/127.0.0.1:{port}", "local", env_id, token, "test")
         buses.append(agent)
-        capabilities = await wait_ready(speaker, "request/capabilities")
-        assert "greet" in str(capabilities)
+        features = await wait_ready(speaker, "request/features")
+        assert "greet" in str(features)
         await wait_ready(agent, "request/task/status")
         for filename, state in (
             ("03_call_skill.py", "SUCCEEDED"),
@@ -125,8 +125,8 @@ async def test_custom_node_and_skill_run_from_another_working_directory(monkeypa
             output = await run_client(directory / filename, tmp_path)
             assert state in output
             assert all(child.returncode is None for child in children)
-        await agent.request("request/agent/shutdown", {}, control=True)
-        await speaker.request("request/tts/shutdown", {}, control=True)
+        await agent.request("request/node/agent/shutdown", {}, control=True)
+        await speaker.request("request/node/speaker/shutdown", {}, control=True)
         for child in children:
             assert await asyncio.wait_for(child.wait(), timeout=5) == 0
     finally:

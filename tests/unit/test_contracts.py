@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from wrs_agent.schemas import Envelope, Plan, Step, decode
 from wrs_agent.skills import validate_skill
+from wrs_agent.skills.robot import SKILLS
 from wrs_agent.transport import Inbox, loopback_config
 
 
@@ -56,7 +57,7 @@ def test_bad_dag(steps):
 )
 def test_invalid_skill(skill, args):
     with pytest.raises(ValueError):
-        validate_skill(skill, 1, args)
+        validate_skill(skill, 1, args, registry=SKILLS)
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,5 @@
 [nodes.speaker]
-type = "tts"
+type = "custom"
 suffix = "-speaker"
 actions = true
 enabled = true
@@ -9,6 +9,3 @@ type = "agent"
 suffix = ""
 actions = false
 enabled = true
-
-[skills]
-greet = "speaker"

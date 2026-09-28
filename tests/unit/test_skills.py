@@ -1,39 +1,35 @@
-from dataclasses import replace
 
 import pytest
 from conftest import action
+from skill_fixtures import BINDINGS, SKILLS, all_features, features
 
-from wrs_agent.actions import ActionExecutor
-from wrs_agent.bindings import load_bindings
+from wrs_agent.env.mock import VirtualWorld
 from wrs_agent.errors import AgentError
-from wrs_agent.runtime import validate_plan
-from wrs_agent.schemas import CapabilitySnapshot, Empty, Plan, Step
+from wrs_agent.executor import ActionExecutor
+from wrs_agent.plan_validation import validate_plan
+from wrs_agent.schemas import Empty, Plan, Step
 from wrs_agent.skills import (
-    SKILLS,
     Skill,
-    SkillSpec,
-    VirtualWorld,
     lookup_skills,
     validate_skill,
 )
 
-BINDINGS = load_bindings()[1]
 MOTION = ("observe", "move_named_pose", "move_relative", "set_gripper")
 
 
 def caps():
     return {
-        "wrs": CapabilitySnapshot(skills={"observe": 1, "move_named_pose": 1}),
-        "tts": CapabilitySnapshot(backend="mock_tts", skills={"speak": 1}),
+        "wrs": features({"observe": 1, "move_named_pose": 1}),
+        "tts": features(backend="mock_tts", names={"speak": 1}),
     }
 
 
 def motion_caps():
     """WRS 节点实际注册的技能。"""
-    return {"wrs": CapabilitySnapshot(skills={n: SKILLS[n].spec.version for n in MOTION})}
+    return {"wrs": features({n: SKILLS[n].spec.version for n in MOTION})}
 
 
-def test_lookup_offers_every_available_skill_and_filters_by_capability():
+def test_lookup_offers_every_registered_skill():
     """选哪个技能由模型判断，所以可用的都要交出去，不能替它猜。"""
     offered = {s.name for s in lookup_skills(caps(), BINDINGS)}
     assert offered == {"observe", "move_named_pose", "speak"}
@@ -50,10 +46,11 @@ def test_relative_motion_describes_all_six_directions():
 
 def test_gripper_contract_accepts_only_open_or_close_and_denies_grasp_claims():
     for command in ("open", "close"):
-        assert validate_skill("set_gripper", 1, {"command": command}).command == command
+        args = validate_skill("set_gripper", 1, {"command": command}, registry=SKILLS)
+        assert args.command == command
     for bad in ({}, {"command": "half"}, {"command": "open", "width": 0.01}):
         with pytest.raises(AgentError, match="invalid_arguments"):
-            validate_skill("set_gripper", 1, bad)
+            validate_skill("set_gripper", 1, bad, registry=SKILLS)
     spec = SKILLS["set_gripper"].spec
     assert spec.resources == ["arm"] and spec.verification == "wrs_fk"
     assert "never confirms contact or holding" in spec.description
@@ -86,14 +83,14 @@ def test_verification_must_depend_on_the_motion_it_verifies():
         ]
     )
     with pytest.raises(ValueError, match="unordered_resource_conflict"):
-        validate_plan(plan)
+        validate_plan(plan, all_features(), BINDINGS)
     ordered = Plan(
         steps=[
             Step(step_id="move_to_B", skill="move_named_pose", args={"pose": "B"}),
             Step(step_id="verify", skill="observe", depends_on=["move_to_B"]),
         ]
     )
-    assert validate_plan(ordered) == ordered
+    assert validate_plan(ordered, all_features(), BINDINGS) == ordered
 
 
 def test_conflict_names_the_two_steps_and_the_resource():
@@ -106,7 +103,7 @@ def test_conflict_names_the_two_steps_and_the_resource():
         ]
     )
     with pytest.raises(AgentError) as caught:
-        validate_plan(plan)
+        validate_plan(plan, all_features(), BINDINGS)
     message = caught.value.error.message
     assert "move_to_B" in message and "verify" in message and "arm" in message
     # 只点名真正冲突的那一对；speak 占的是 speaker，和它们本来就能并行。
@@ -127,7 +124,7 @@ def test_ordering_follows_the_whole_chain_not_just_direct_dependencies():
             ),
         ]
     )
-    assert validate_plan(plan) == plan
+    assert validate_plan(plan, all_features(), BINDINGS) == plan
 
 
 def test_separate_resources_still_run_without_an_imposed_order():
@@ -138,7 +135,7 @@ def test_separate_resources_still_run_without_an_imposed_order():
             Step(step_id="look", skill="observe"),
         ]
     )
-    assert validate_plan(plan) == plan
+    assert validate_plan(plan, all_features(), BINDINGS) == plan
 
 
 def test_skill_contracts_describe_abilities_without_deployment_defaults():
@@ -176,7 +173,7 @@ def test_skill_lookup_and_plan_validation_use_the_same_explicit_binding():
     assert validate_plan(plan, available, bindings) == plan
 
 
-async def test_local_registration_drives_validation_capabilities_and_execution(tmp_path):
+async def test_local_registration_drives_validation_features_and_execution(tmp_path):
     calls = []
 
     def mark(state, args, stop, progress):
@@ -185,26 +182,20 @@ async def test_local_registration_drives_validation_capabilities_and_execution(t
         state.pose = "B"
         return state.pose == "B"
 
-    spec = SkillSpec(
-        name="mark",
-        description="Reviewed local test handler",
-        parameters=Empty.model_json_schema(),
-        required_capabilities=["mark"],
-        resources=["arm"],
-        preconditions=[],
+    skill = Skill(
+        name="mark", arguments=Empty, handler=mark,
+        description="Reviewed local test handler", resources=("arm",),
         verification="test_state",
-        interrupt_mode="controlled_stop",
     )
     env = ActionExecutor(
         tmp_path / "registered.sqlite3",
         state=VirtualWorld({}),
-        skills={"mark": Skill(spec, Empty, mark)},
+        skills=[skill],
         backend="test",
-        duration=0.01,
     )
     try:
-        assert env.capabilities().skills == {"mark": 1}
-        assert env.capabilities().resources == ["arm"]
+        assert env.features().skills == {"mark": 1}
+        assert env.features().resources == ["arm"]
         assert not (await env.submit(action(env, "pick", {"object": "A"}))).accepted
         assert not (await env.submit(action(env, "mark", {"unexpected": "argument"}))).accepted
         assert calls == []
@@ -218,16 +209,15 @@ async def test_local_registration_drives_validation_capabilities_and_execution(t
         await env.close()
 
 
-@pytest.mark.parametrize("mismatch", ["name", "schema", "handler"])
-def test_invalid_registration_rejected_before_opening_journal(tmp_path, mismatch):
-    entry = SKILLS["observe"]
-    if mismatch == "name":
-        entry = replace(entry, spec=entry.spec.model_copy(update={"name": "wrong"}))
-    elif mismatch == "schema":
-        entry = replace(entry, arguments=SKILLS["pick"].arguments)
-    else:
-        entry = replace(entry, handler=None)
+@pytest.mark.parametrize("invalid", ["unbound", "not_a_skill", "mapping"])
+def test_invalid_registration_rejected_before_opening_journal(tmp_path, invalid):
+    skills = {
+        "unbound": [SKILLS["observe"]],
+        "not_a_skill": [object()],
+        "mapping": {"observe": SKILLS["observe"].bind(lambda *args: True)},
+    }[invalid]
     path = tmp_path / "must-not-open.sqlite3"
-    with pytest.raises(ValueError, match="invalid_skill_registration"):
-        ActionExecutor(path, state=VirtualWorld({}), skills={"observe": entry}, backend="test")
+    expected = TypeError if invalid == "mapping" else ValueError
+    with pytest.raises(expected, match="skills_sequence_required|invalid_skill_registration"):
+        ActionExecutor(path, state=VirtualWorld({}), skills=skills, backend="test")
     assert not path.exists()

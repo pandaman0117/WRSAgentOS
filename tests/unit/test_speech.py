@@ -11,15 +11,11 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import action, control, eventually
 
-from wrs_agent.actions import ExecutionUnknown
+from wrs_agent.executor import ExecutionUnknown
+from wrs_agent.nodes import model_assets as assets
+from wrs_agent.nodes.tts.backend import SpeechBackend, make_speech_executor
+from wrs_agent.nodes.tts.qwen import STOP_CHECK_STEPS, QwenTTS
 from wrs_agent.schemas import ActionState
-from wrs_agent.speech import assets
-from wrs_agent.speech.tts import (
-    STOP_CHECK_STEPS,
-    QwenTTS,
-    SpeechBackend,
-    make_speech_executor,
-)
 
 
 async def test_cancel_during_synthesis_does_not_play_late_audio(tmp_path):
@@ -198,7 +194,7 @@ def test_model_loading_requires_verified_local_files(tmp_path, monkeypatch):
 
 
 def test_asr_loader_is_local_chinese_command_profile(monkeypatch, tmp_path):
-    from wrs_agent.speech import asr
+    from wrs_agent.nodes.asr import qwen as asr
 
     called = []
     model = SimpleNamespace(from_pretrained=lambda *a, **kw: called.append((a, kw)))
@@ -262,7 +258,8 @@ def test_speech_node_uses_own_interpreter_without_core_dependency_overlay(tmp_pa
     command = stack.node_command("tts")
     assert command[0] == str(interpreter)
     assert "-S" not in command and "scripts/run.py" not in command
-    assert command[-4:] == ["--tts-backend", "qwen", "--tts-prepare", "正在上移。"]
+    options = json.loads(command[command.index("--options") + 1])
+    assert options["backend"] == "qwen" and options["prepared_texts"] == ["正在上移。"]
 
 
 def test_capture_node_uses_own_interpreter_and_carries_its_vocabulary(tmp_path):
@@ -276,10 +273,11 @@ def test_capture_node_uses_own_interpreter_and_carries_its_vocabulary(tmp_path):
     command = stack.node_command("asr")
     assert command[0] == str(interpreter)
     assert "-S" not in command and "scripts/run.py" not in command
-    assert command[-6:] == ["--asr-backend", "qwen",
-                            "--asr-vocabulary", "机器人", "--asr-vocabulary", "停止"]
+    options = json.loads(command[command.index("--options") + 1])
+    assert options["backend"] == "qwen" and options["vocabulary"] == ["机器人", "停止"]
     # Capture options stay on the capture node; Voice keeps its own command.
-    assert "--asr-backend" not in stack.node_command("voice")
+    voice = stack.node_command("voice")
+    assert json.loads(voice[voice.index("--options") + 1]) == {}
 
 
 def test_speech_nodes_do_not_inherit_python_path(tmp_path, monkeypatch):
@@ -299,7 +297,7 @@ def test_speech_nodes_do_not_inherit_python_path(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("failure", ["write", "abort", "close"])
 def test_audio_device_errors_never_look_like_confirmed_success(monkeypatch, failure):
-    from wrs_agent.speech.tts import play_audio
+    from wrs_agent.nodes.tts.backend import play_audio
 
     class Samples:
         def reshape(self, *args):
@@ -355,7 +353,7 @@ def test_audio_device_errors_never_look_like_confirmed_success(monkeypatch, fail
 
 @pytest.mark.parametrize("words", ["向上", [""], [1], ["向上"] * 65])
 def test_invalid_vocabulary_rejected_before_model_load(words):
-    from wrs_agent.speech.asr import QwenASR
+    from wrs_agent.nodes.asr.qwen import QwenASR
 
     with pytest.raises(ValueError, match="vocabulary"):
         QwenASR(vocabulary=words)
@@ -424,7 +422,7 @@ def test_missing_models_report_the_absolute_searched_path(tmp_path, monkeypatch)
 
 
 def test_wrong_asr_interpreter_reports_the_prepared_environment_before_loading(monkeypatch):
-    from wrs_agent.speech import asr
+    from wrs_agent.nodes.asr import qwen as asr
 
     monkeypatch.setattr(asr, "find_spec", lambda name: None)
 

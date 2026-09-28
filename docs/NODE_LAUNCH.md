@@ -1,172 +1,302 @@
-# 节点启动：每个节点带自己的配置
+# Node：实现、配置与启动
 
-本文件是启动设计与取舍记录。**状态：设计已确认，代码尚未实现，本文件中的签名和文件名都是待实现的合同，没有任何命令被运行过。** 当前可运行的入口仍是 `launch(backend="wrs", tts_backend=..., ...)`，迁移完成前以代码为准。
+当前实现采用一层继承：WrsNode、TtsNode、AgentNode、VoiceNode、AsrNode 直接继承 Node。
+Node 负责生命周期和通信资源，执行器、Runtime、Planner、设备后端仍通过组合使用。
+普通使用者继续使用 launch/connect/step；只有开发节点时才需要接触 Node。
 
-## 现在为什么死板
+本文替代之前尚未实现的 NodeSpec 草案。没有引入 Module/NodeModule、Blueprint 类、
+自动连线、插件发现或新的传输。DimOS 的参考版本与取舍见 [SOURCES](SOURCES.md)。
 
-问题不是 `launch()` 参数多，而是节点选项被拉平成一个全局命名空间，同一条规则在六个文件里各写一遍。
+## 写一个节点
 
-一个节点选项今天要穿过 `sync.launch` → `System.launch` → `LocalStack.__init__` → `LocalStack.node_command` → `serve_node` → `__main__` 六层转发。`launch()` 的 13 个参数里有 9 个是某一个节点的（backend、scene、duration、tts_backend、tts_python、tts_prepared_texts、model_provider、live_model、deferred_planner），只有 4 个是部署范围的（bindings、port、site、env_id），而签名看不出哪个属于谁。
-
-具体后果：
-
-- `node_command` 无条件给每个角色都加 `--duration`。`duration=4.0` 原意是 WRS 仿真运动时长，同时也会把 Mock TTS 的每句播报拉到 4 秒。同一个名字在不同角色表示不同的东西。
-- `{"mock", "wrs"}`、`0 < duration <= 30`、在线模型的 live-model opt-in 在 `LocalStack.__init__`、`serve_node`、`__main__` 的 argparse 里各有一份。`tests/unit/test_processes.py` 的 `test_cli_rejects_unsafe_configuration`、`test_python_node_entry_rejects_invalid_configuration`、`test_removed_wrs_backend_name_fails` 分别盯着这三份副本。PLANS.md 要求「相同语义只保留一套定义」，这里没做到。
-- 角色特例散在启动器里：qwen TTS 用独立解释器是 `node_command` 中间一句替换 `result[result.index("-m"):]` 的隐藏动作，它的默认路径在 `LocalStack.__init__`，它的 300 秒就绪超时是 `_wait_ready` 调用点的一个内联条件。
-- 命名已经开始漂：`LocalStack(deferred=...)` / `serve_node(deferred_planner=...)` / `--deferred-planner` 是同一件事的三个名字。
-
-## 目标与不做的事
-
-目标只有三条：选项跟着它的节点走；每条规则只有一份定义；加一个节点选项只改一处。
-
-明确不做：不引入节点基类、自动装配、按名字推断连线、entry-point 发现、多实例命名空间、传输覆盖或协调器。不改动作协议、Runtime 调度、Transport、消息合同和 `System.connect()`。
-
-## NodeSpec 与四个构造函数
-
-一个冻结的数据类加每个已实现角色一个普通函数，风格对齐固定 WRS 提交里 `UR7E(pos=..., rotmat=...)` 的显式构造，以及本仓库已有的 `step()`。
+完整可运行的例子在 [speaker](../examples/nodes/01_start_speaker.py)。
+其中 create_speaker 创建现有 ActionExecutor，Node 子类只需：
 
 ```python
-# wrs_agent/blueprint.py
-@dataclass(frozen=True)
-class NodeSpec:
-    role: str                 # wrs / tts / agent / voice
-    node_id: str | None       # 默认取 TOML 中该角色的唯一实例
-    options: Boundary         # 已按 OPTIONS[role] 校验
-    explicit: frozenset[str]  # 调用者真正写出的键，来自 options.model_fields_set
-    python: Path | None       # 显式覆盖解释器；不写则按最终 options 推导
+from wrs_agent.nodes import Node
+from wrs_agent.nodes.serve import serve_node
 
-def wrs_node(*, backend=..., duration=..., scene=..., fault=..., node_id=None): ...
-def tts_node(*, backend=..., duration=..., prepared_texts=..., python=None, node_id=None): ...
-def agent_node(*, provider=..., live_model=..., deferred_planner=..., node_id=None): ...
-def voice_node(*, node_id=None): ...
+class SpeakerNode(Node):
+    action_service = True
+
+    async def setup(self):
+        self.actions(create_speaker(self.journal))
+
+# 在 async main 中运行；Router 地址和会话凭据与同环境节点一致。
+await serve_node(
+    SpeakerNode,
+    node_id="speaker",
+    endpoint="tcp/127.0.0.1:7448",
+    env_id="node-demo",
+)
 ```
 
-校验用每个角色一份 Pydantic 模型，是这些规则的唯一定义处，`extra="forbid"`：
+节点通过 action_service 声明动作服务，执行器绑定技能后自动发布合同，不需要写入共享 TOML。
+多个同类型节点可以共存，由 node_id 区分；每个动作节点仍独占自己的执行端点。
+需要按角色选择 Agent、Voice 等服务时，可以用 peers 指定 node_id；未指定时只接受唯一的在线角色。
+LocalStack/launch 的本地便捷配置仍限制每个内置角色一个进程，独立启动的节点不受这个清单限制。
+
+自定义类只从受信任的本地 Python 传入，不接受配置文件中的类路径、网络插件或自动导入。
+LocalStack/launch 当前只自动启动五类内置节点；自定义节点用自己的脚本调用 serve_node。
+
+## 启动清单与运行时发现
+
+`bindings.toml` 是 launch 的部署输入：决定启动哪些节点、使用什么后缀，并把本节点参数传给子进程。
+Node 和 Agent 不保存完整部署清单；默认 `System.connect()` 也不读取它。
+独立节点只需要自己的 node_id、通信域 site/env_id、Router endpoint 和业务 options。
+默认服务地址是 env_id + "-" + node_id；suffix 可以显式覆盖。
+
+| 对象 | 职责 |
+|---|---|
+| launch / LocalStack | 读取部署清单，启动、等待和关闭自己拥有的进程 |
+| Node | 初始化本节点，发布描述和在线声明，持有本节点的资源 |
+| NodeRegistry | 发现同一通信域内的节点，查询身份、地址、动作能力、技能及就绪状态 |
+| Runtime | 选择执行节点，将节点实例和授权固定到具体任务，调度并记录结果 |
+
+Registry 是持有者内部的普通对象，不是新增的注册中心进程。节点在统一的发现域声明在线状态；
+Agent 和客户端可以各自查询目录，并直接连接实际的服务地址。
+建立连接不会启动目标节点，也不等于目标已准备好。
+`await registry.wait_for("speaker")` 用于等待加入；`registry.transport("speaker")` 取得已发现连接。
+节点业务代码可用 `self.discover()` 获得由 Node 清理的目录，再等待依赖、调用 `self.connect(node_id)`。
+
+晚加入节点的可运行示例是 [06_late_node.py](../examples/nodes/06_late_node.py)：
+先启动 Agent 和客户端，再启动未写入部署文件的 GreetingNode，同一个客户端能直接调用，Agent 也能调度它。
+节点退出后目录暂留离线描述，描述缓存满时回收离线项；相同 node_id 重启会产生新的 boot_id，旧任务不会沿用新实例。
+重复身份或多个动作节点共用服务地址会使目录拒绝调度，本机还会在启动阶段检查实例锁。
+不同 site/env_id 的发现互相隔离。
+
+目录最多保留 64 项节点描述；全部在线时拒绝额外描述请求并报告
+`discovery_capacity_exceeded`，已有不同地址节点继续工作。在线声明单独跟踪，最多 1024 个节点名、每名 16 个实例，
+因此超额节点仍参与同址冲突检查。超出声明跟踪范围时暂停普通调度并报告容量不足，
+下次刷新重新同步，容量恢复后可以继续使用。
+回收描述不关闭旧任务仍持有的连接；连接仍按既有 128 个目标预算保留到目录关闭。
+每技能只保留原提供者或歧义标记（最多 4096 项），不随历史节点数量无限增长。
+
+
+技能选择与进程启动分开：`System.connect(skill_bindings={"greet": "speaker"})` 为客户端的
+`action()` 和 `skills()` 明确选择服务提供者。`system.start()` 提交的任务由 Agent 自己选择提供者，
+需要在 `serve_node(AgentNode, skill_bindings={"greet": "speaker"}, ...)` 中传入相同选择，
+或在 launch 部署文件的 `[skills]` 中配置；客户端的选择不会隐式修改 Agent。
+同名技能有多个已发现提供者时需要明确选择；某个提供者离线不能悄悄变成故障转移。
+已有任务保留开始时选定的提供者、技能合同和启动实例。
+显式传入旧 `bindings=` 的兼容入口只做边界转换，不把该文件作为动态发现的白名单。
+
+## features、skills 和 options
+
+- `features`：节点提供哪些功能，用字符串标签说明，例如 `task.coordinate`。
+- `skills`：节点可以实际执行哪些操作，例如 `speak@1`。
+- `options`：节点的启动设置，例如后端与预加载文本。
+
+普通节点在类上声明功能：
 
 ```python
-class WrsOptions(Boundary):
-    backend: Literal["mock", "wrs"] = "mock"
-    duration: float = Field(0.4, gt=0, le=30)
-    scene: FilePath | None = None
-    fault: Literal["grasp", "grasp_once", ...] | None = None
-
-OPTIONS = {"wrs": WrsOptions, "tts": TtsOptions, "agent": AgentOptions, "voice": VoiceOptions}
+class AgentNode(Node):
+    features = ("task.coordinate",)
 ```
 
-构造函数立即校验，因此非法 backend、越界 duration、不存在的 scene 文件在任何进程启动前失败。`wrs_node(scene=...)` 在自己的构造函数里调一次 `load_scene()` 做 fail-fast——这个知识跟着 WRS 角色，不再是启动器里的一个 `if`。
+动作节点通过 `self.actions(executor)` 装配，实际提供的技能从注册表生成。
+features 是节点声明的功能标签，用于展示；不再从技能的要求反推出节点能力。
+技能准入依据实际合同及执行器状态，动作授权仍由执行端检查。
 
-`explicit` 用 Pydantic 现成的 `model_fields_set` 记录调用者真正写出的键，不额外维护哨兵值。它的作用见下面的合并顺序。
+`system.nodes()` 返回的节点信息使用 `features` 字段；底层动作客户端的
+`await client.features()` 返回 `FeatureSnapshot`，包含完整技能 specs、版本、资源、boot_id、skill_revision 和停止范围。
 
-用户写出来是这样：
+动态技能接口与纯参数预检见 [技能库](../wrs_agent/skills/README.md)。
+
+## 子类与基类各负责什么
+
+| 接口 | 使用方式 |
+|---|---|
+| setup() | 子类初始化设备/模型，登记服务；完成后才公布节点存在和初始化完成 |
+| teardown() | 可选业务清理；初始化失败或协程取消时也可能调用，须容忍部分初始化 |
+| on_close(callback) | 获得资源后立即登记同步或异步清理；自动逆序执行 |
+| actions(executor) | 绑定已有 Action 协议并接管执行器的关闭；类声明 action_service = True，或显式传 actions=True |
+| add_skills(*skills) | 显式追加已绑定技能，启动和运行期间共用；拒绝同名覆盖，下一次查询可发现 |
+| discover() / connect(node_id) | 创建并复用运行时目录 / 连接已发现节点；先等待依赖加入 |
+| spawn(coroutine) | 管理后台协程；退出时取消并等待收尾，运行异常使节点退出 |
+| transport | 既有 Transport，可登记 Query 和发布/订阅消息；消息边界仍用 Pydantic |
+
+子类不需要调用 super().setup()/teardown()。构造函数只校验本节点参数，不开连接、
+不加载模型、不启动线程；资源在 setup 中创建。同步阻塞设备操作仍在受控工作线程执行，
+不能因继承 Node 就放进事件循环。常驻循环用 spawn 管理。
+Voice、ASR 在 setup 中等待所需节点加入，等待可被取消，不另设短于依赖初始化的期限。
+LocalStack 统一管理全栈启动期限：普通后端为 10 秒；任何已启用节点使用 Qwen 后端时，
+所有节点及其间接依赖共享 300 秒的初始化预算。超时会取消等待并清理本次启动的进程。
+独立调用 serve_node 时，由调用者管理启动等待期限或取消运行。
+
+清理顺序为：teardown → 已登记资源逆序清理 → 所有连接 → 实例锁。
+一项清理抛异常仍尝试其余资源，异常向调用者报告；节点关闭后不能重新连接或重复运行同一实例。
+动作节点的停止与结果确认仍由 ActionExecutor/Environment 处理，取消后台协程不等于设备停止。
+动作编号、epoch、幂等、UNKNOWN 和 Runtime 调度未另建一套实现。
+
+Node 的资源、后台任务和默认列表都属于实例；不同 Node 不共享可变状态。
+节点有界输入、普通请求和控制请求继续使用 Transport 原有隔离路径。
+
+## 内置节点
+
+| 类及文件 | 组合的业务对象 |
+|---|---|
+| [WrsNode](../wrs_agent/nodes/wrs/node.py) | WRS 或 Mock Environment |
+| [TtsNode](../wrs_agent/nodes/tts/node.py) | Qwen 或 Mock 播报执行器 |
+| [AgentNode](../wrs_agent/nodes/agent/node.py) | Runtime、Planner 和节点目录 |
+| [VoiceNode](../wrs_agent/nodes/voice/node.py) | 文本分类与独立控制入口 |
+| [AsrNode](../wrs_agent/nodes/asr/node.py) | 采集/识别后端与按键会话 |
+
+[nodes/node.py](../wrs_agent/nodes/node.py) 是唯一公共基类；
+[nodes/serve.py](../wrs_agent/nodes/serve.py) 集中内置名称到类的映射 NODES、
+启动参数转换 node_options，以及选择、构造并运行节点的 serve_node。
+AsrNode/VoiceNode 的请求处理是实例方法，setup 登记方法，teardown 收尾业务线程/任务。
+Agent 的运行状态仍由 Runtime 拥有；agent/rpc.py 只保留无状态的 register_runtime 消息适配。
+动作消息同样复用公共 action_rpc.py，不把执行器的状态机重复写进每个节点。
+
+## VoiceNode 的职责
+
+VoiceNode 接收已经识别或键入的文字，按本地规则分类并去重，再转成任务或控制请求；
+它没有麦克风、识别模型或扬声器。ASR 负责声音转文字，TTS 负责文字转声音。
+
+- 普通目标提交 Agent，查询读取任务状态。
+- 明确停止通过独立控制通道交给 Runtime；仅停止播报则直接取消 TTS。
+- 部分识别、含糊或否定的停止不执行控制；相同输入编号重试保持原目标。
+- ASR 节点将普通识别结果交还调用方，由调用方决定何时提交；明确停止则立即转发 Voice。
+
+这层可供语音和键盘共用。具体规则与回执见 [识别文本与任务中断](VOICE_INPUT.md)。
+键盘等入口可独立于 ASR/TTS 模型发出控制请求，Voice 处理停止也不等待 Planner。
+普通显式任务仍可直接使用 System API。
+
+## 目录与扩展位置
+
+```text
+nodes/
+  node.py                 # 共用生命周期与连接
+  action_rpc.py           # 共用动作协议
+  options.py              # Texts / Duration 共享约束
+  model_assets.py         # 模型文件校验与离线 GPU 加载要求
+  asr/
+    node.py               # AsrOptions / AsrNode：配置、按键会话、结果、停止转发
+    capture.py            # 麦克风录音 / 脚本文字采集
+    qwen.py               # QwenASR
+    assets.json           # ASR 固定模型清单
+  tts/
+    node.py               # TtsOptions / TtsNode：配置、装配动作执行器
+    backend.py            # 播报状态、声卡播放、合成/播放协调、离线播报
+    qwen.py               # QwenTTS
+    assets.json           # TTS 固定模型清单
+  wrs/                    # node.py：WrsOptions / WrsNode
+  agent/                  # node.py：AgentOptions / AgentNode；rpc.py：Runtime 协议
+  voice/                  # node.py；没有额外配置就不建空 options.py
+```
+
+各包的 __init__.py 只导出 Node 类；仍可 `from wrs_agent.nodes.asr import AsrNode`。
+WRS Environment 适配器继续留在 env/，它是机器人动作的唯一入口。
+技能参数与合同继续留在 skills/robot、skills/speech，供客户端与执行后端共同使用。
+
+ASR 的旧 register_asr 曾同时持有会话、锁和 RPC，Node 只调用它，造成两个状态入口。
+现在这些成员归 AsrNode，begin/end/result/health 是直接可测试的方法；
+teardown 释放按键并等待采集线程退出。替换捕获后端可覆写 create_capture，
+复用同一套幂等、过期输入与停止转发规则。
+Voice 的去重记录与处理方法也归 VoiceNode，清理仍等待已持有的任务收尾。
+
+TTS 通过 SpeechBackend 组合 render/play，把设备逻辑留在后端；TtsNode 只选择实现。
+这与 WRS 的“公共机制、具体类、本地组件组合”相同；不需要新的 SpeechNode 基类或 mixin 层。
+构造后端不自动下载模型；资源清单分别随节点打包，共用 model_assets.py 做校验。
+
+## 每个节点的选项
+
+配置类与 Node 放在同一个 node.py，先定义 Options，再定义使用它的 Node；未知字段被拒绝。
+[公共 options.py](../wrs_agent/nodes/options.py) 只提供 Texts/Duration 两个共享字段约束；
+场景文件校验归 WrsOptions，AgentOptions 的 live_model 控制是否创建 LLMClient。
+自定义节点可设置 options_type 为自己的 Boundary/Pydantic 模型，通过 self.options 读取。
+
+| 节点 | options 字段 |
+|---|---|
+| WRS | backend、duration、scene、fault |
+| TTS | backend、duration、prepared_texts |
+| Agent | live_model（默认 false，只接受显式计划；true 启用 LLMClient） |
+| Voice | 无额外选项 |
+| ASR | backend、script、vocabulary |
+
+例如：
 
 ```python
-async with System.launch(
-    wrs_node(backend="wrs", duration=4.0),
-    tts_node(backend="qwen", prepared_texts=[GREETING, *SPEECHES]),
-    bindings=CONFIG,
-    port=7449,
-    env_id="wrs-demo",
-) as system:
+await serve_node(
+    "tts",
+    options={"backend": "mock", "duration": 0.2},
+)
 ```
 
-`launch` / `System.launch` 只保留 `*specs` 加 `bindings`、`port`、`site`、`env_id`。
+配置复用使用普通 Python 数据，例如 SPEECH_OPTIONS 字典；不创建额外配置框架。
+传输地址、身份、日志路径与业务 options 分开；options 不能覆盖节点身份、动作服务声明或技能选择。
+凭据仍只从环境读取，在线模型须显式 live_model=True。未启用时 goal() 返回
+planner_unavailable_or_busy；start()/action()、查询和控制仍可用。没有默认模型替身。
 
-## 选项怎样跨进程
+高层 launch/System.launch/LocalStack 使用 live_model=True 启用模型；model_provider 和 deferred 已删除。
+其他参数在进程边界统一转换为各自的 options JSON。每个内置 Node 的 launch_options 只映射现有平铺参数到本节点字段，
+serve.node_options 统一转换；LocalStack 不再逐个角色拼接后端参数，子进程按同一合同重新校验。
+旧的 duration 参数仍同时用于 WRS 仿真和 Mock TTS；直接 serve_node 可以分别设置。
+本轮未增加 NodeSpec 或新的 launch profile API。
 
-**一份 options 载荷，不再是 N 个命令行 flag。** `LocalStack` 把合并并校验后的选项写到 `.local/runs/<env_id>/<node_id>.options.json`，命令退化成完全通用的形状：
+CLI 保留 --backend、--tts-backend、--live-model 等便捷参数，也接受单节点 --options JSON。
+两种业务配置写法不能混用；--options 不用于整组 launch。Python serve_node 的旧扁平后端参数
+和 action_factory 已迁移：后端参数放 options，自定义执行器放子类 setup。
 
-```
-python -m wrs_agent wrs --node-id wrs --endpoint tcp/127.0.0.1:7449 --site local \
-    --env-id wrs-demo --journal <run>/wrs.sqlite3 --options <run>/wrs.options.json --bindings <path>
-```
+## 启动完成、动作准入与退出
 
-走文件而不是内联 JSON 的理由是实打实的：`prepared_texts` 是任意长度的中文短句，Windows 命令行长度和引号转义都不可靠；同时不把参数暴露在进程表里。
+LocalStack 在 Router 就绪后启动所有已启用的内置进程，再并发等待各自的
+request/node/<node_id> 返回。启动不再依次等待 wrs → tts → agent → voice → asr；
+进程创建顺序保留稳定，便于日志与诊断。
 
-`node_command` 因此不再有任何 `if role ==`；`__main__` 删掉 9 个 flag（`--backend/--tts-backend/--tts-prepare/--scene/--duration/--fault/--model-provider/--live-model/--deferred-planner`），只留 7 个通用参数加 `--options`。`serve_node` 的角色到 builder 选择变成一张本地函数表，和现有 `SKILLS` 同一个套路：
+该查询在 setup 完成后才注册。成功回复表示初始化完成；回复中的 ready 仍沿用
+“能否接收动作”的语义，HELD/UNKNOWN 不会被启动器偷偷改为 OPEN。
+模型加载完成后才公布节点，默认等待 10 秒，Qwen TTS/ASR 为 300 秒。
+launch 使用 requires 检查便捷启动清单是否完整；独立节点从目录等待所需角色，peers 可指定具体实例。
+停止目标在初始化时确定，控制请求不会临时等待新一轮发现。
 
-```python
-BUILDERS = {"wrs": build_wrs_executor, "tts": build_tts_executor}
-```
+一项初始化失败或超时，TaskGroup 取消并等待其他就绪探针，LocalStack 清理自己启动的进程。
+已有独立服务不会被接管。多个失败可能以 ExceptionGroup 返回。
 
-**校验仍然是两次，规则只有一份。** 子进程不信任启动器，`serve_node` 拿到 options 后用同一个 `OPTIONS[role]` 重新解析。options 里不允许出现可导入的模块路径或回调名，符合「只接受本地代码中的明确回调」；`action_factory` 继续只从同进程 Python 传入。options 也碰不到 `suffix`/`actions`/`enabled`/技能绑定。
+生命周期退出入口统一为 request/node/<node_id>/shutdown，走原有控制队列并校验凭据。
+旧 request/<role>/shutdown 已移除，仓库内调用同步迁移。
+动作、任务和语音停止入口保持原样；退出受理不意味着物理停止已确认。
 
-`python` 和就绪超时在合并后由最终 options 推导，推导表和 options 模型放在一起：`backend == "qwen"` 时使用 `.local/venvs/qwen-tts` 的解释器（因而不加 `-S scripts/run.py` 的依赖垫片）并给 300 秒就绪预算，其余用调用者的 `sys.executable` 和 10 秒。`LocalStack` 只剩 `spec.python or python_command()` 一句。
-
-## TOML 与 Python 的分工
-
-TOML 继续是**授权记录**：哪些 node_id 存在、suffix、是否提供动作、是否启用、哪个技能允许交给哪个节点。这一层不能被示例脚本覆盖。
-
-TOML 新增可选的 `[nodes.<id>.options]`，作为该节点的**默认选项**，使 profile 文件自描述、CLI 不需要任何后端 flag：
-
-```toml
-[nodes.wrs]
-type = "wrs"
-suffix = ""
-actions = true
-enabled = true
-
-[nodes.wrs.options]
-backend = "wrs"
-duration = 4.0
-```
+## 验证入口
 
 ```powershell
-python -m wrs_agent launch --bindings configs/wrs_voice.toml
+./scripts/run.ps1 -m pytest -q tests/unit/test_node_lifecycle.py tests/integration/test_custom_nodes.py tests/integration/test_dynamic_nodes.py
+./scripts/run.ps1 scripts/verify.py --wrs
 ```
 
-最终取值顺序是 **模型默认 ← TOML options ← spec 的 explicit 键**，逐键合并。有了 `explicit`，`wrs_node(duration=4.0)` 只覆盖 duration，不会把 TOML 里的 `backend = "wrs"` 打回默认的 mock。
+前者覆盖初始化失败、取消、清理异常、后台任务失败、并行初始化、custom 身份和独立退出，
+以及没有共享部署文件的晚加入节点、重启授权失效、提供者选择、地址冲突和发现隔离；
+完整验收还覆盖动作幂等、资源隔离取消、迟到规划、跨进程重连和 WRS 虚拟运动。
+真实命令和结果见 [验收记录](ACCEPTANCE.md)。
 
-`-m wrs_agent launch --model-provider llm --live-model` 由此变成一个 profile 文件里的 `provider = "llm"` / `live_model = true`。付费调用的实际门槛不变：仍然是 `LLM_API_KEY` 等环境变量，没有凭据就在 `LLMConfig.from_env`/`LLMClient` 明确失败；`scripts/verify.py` 不加载这类 profile，自动验收依旧不产生付费请求。
+## 功能名称迁移
 
-## 几条语义规定
+为便于阅读，原 capabilities 统一改为 features：
 
-这些规定的作用是把「蓝图是普通值」的好处留下，同时不带上隐式装配：
-
-- **spec 不改变启动成员。** 成员仍由 TOML 的 `enabled` 决定；spec 只覆盖某个已启用节点的选项。给未声明或未启用的节点传 spec 直接报错。因此 `launch()` 裸调用和 `launch(wrs_node(backend="wrs"))` 都还是一行。
-- **参数顺序不决定启动顺序。** 启动顺序仍是固定的 `wrs → tts → agent → voice`（voice 依赖前三者），写成模块常量后对 spec 排序，把 `voice_node()` 写在第一个也不会坏。
-- **同一 node_id 出现多次时后写覆盖**，用于局部改掉共享 profile：`launch(*WRS_VOICE, tts_node(backend="mock"))`。
-- **命名 profile 不需要新机制**：`WRS_VOICE = (wrs_node(...), tts_node(...))` 就是一个模块级元组，用 `launch(*WRS_VOICE, ...)` 展开。
-
-## 从 DimOS 借什么、明确不借什么
-
-补上 [节点与消息](NODES_AND_MESSAGES.md) 里 Blueprint 那一栏的具体取舍。参考版本与许可见 [SOURCES](SOURCES.md) 的 S23。
-
-| DimOS 机制 | 是否借 | 原因 |
-|---|---|---|
-| 蓝图是冻结的、可组合的普通值，每个组件带自己的配置 | 借 | 正好治好选项拉平的问题，零新依赖、零新基类 |
-| 同一组件重复出现时后写覆盖 | 借 | 测试和示例确实需要局部改一个节点 |
-| `Module` 基类、`ModuleConfig` 继承、`.blueprint` classproperty | 不借 | 节点仍是 `serve_node()` 调用，V1 不需要共同继承 |
-| `autoconnect()` 按 (属性名, 类型) 推断连线 | 不借 | 本项目连线来自 TOML 加 Zenoh key 后缀；靠名字推断等于让命名授予端点权限 |
-| `dimos.blueprints` entry-point 发现、`dimos run pkg.name` | 不借 | 按外部包元数据加载代码，违反本仓库的技能/节点注册约定 |
-| `.namespace()` 机群、`.transports()`、`.remappings()`、`ModuleCoordinator`、`BlueprintConfigParser` 的动态 `--module.arg` | 不借 | V1 单角色单实例、单传输；引入只增加故障组合与部署项 |
-
-## 这次要消掉的重复
-
-| 现在的位置 | 迁移后 |
+| 原名称 | 当前名称 |
 |---|---|
-| 三份 backend / duration / live-model 规则 | `OPTIONS[role]` 一份定义，进程两端各解析一次 |
-| `node_command` 的 wrs / tts / agent 分支与解释器替换 | 无角色分支；`spec.python or python_command()` |
-| `LocalStack.__init__` 的 tts_python 默认与 scene 预加载 | `tts_node` / `wrs_node` 构造函数与合并后的推导表 |
-| `_wait_ready` 调用点的 qwen 超时条件 | 由最终 options 推导的 `ready_timeout` |
-| `deferred` / `deferred_planner` / `--deferred-planner` | 单一键 `deferred_planner` |
-| `__main__` 的 9 个后端 flag | `--options` 一个参数；profile 写在 TOML |
+| Node.capabilities、NodeInfo.capabilities | Node.features、NodeInfo.features |
+| SkillSpec.required_capabilities / required_features | 已移除；以实际注册的技能为准 |
+| capabilities() | features() |
+| CapabilitySnapshot | FeatureSnapshot |
+| capabilities_extra | features_extra |
+| request/capabilities | request/features |
 
-## 实施顺序与检查方法
+仓库内的节点、客户端、Runtime、测试和示例已同步迁移，不保留旧名别名。
+节点目录 JSON 和传给 Planner 的技能 spec 字段也一起改名，客户端与节点需要同批更新；
+正在运行的旧进程需要重启。功能标签、技能名称和版本、动作参数及控制语义不变。
 
-一次一个可运行的纵向切片，不同时动协议和 Runtime：
+## 节点目录迁移
 
-1. `wrs_agent/blueprint.py`：`NodeSpec`、四个构造函数、`OPTIONS`、合并与推导函数，加单元测试（非法 backend / 越界 duration / 未知键 / 不存在的 scene / 给未启用节点传 spec / TOML 与 spec 的逐键覆盖顺序）。
-2. `serve_node` 收 `options`，角色到 builder 换成函数表；`__main__` 删后端 flag、加 `--options`。此时旧 `LocalStack` 仍可工作，便于分步验证。
-3. `bindings.load_bindings` 接受可选 `[nodes.<id>.options]` 并保持授权字段的原有严格校验。
-4. `LocalStack` 改为吃 spec 列表，删除全部角色分支；`System.launch` 与 `sync.launch` 改签名。
-5. 迁移 example 与测试，跑 `./scripts/run.ps1 scripts/verify.py` 与 `--wrs`，把三份重复规则的测试收成一份规则测试加两个进程边界测试。
+顶层 wrs_agent.speech 实现包已移除。ASR 的 QwenASR 从 nodes.asr.qwen 导入，
+record_command/record_push_to_talk 从 nodes.asr.capture 导入；
+TTS 的 SpeechBackend/make_speech_executor 从 nodes.tts.backend 导入，
+QwenTTS 从 nodes.tts.qwen 导入。play_audio、SpeechState、make_mock_tts 同在 nodes.tts.backend；
+make_mock_capture 与麦克风录音函数同在 nodes.asr.capture，旧 mock/state/playback 小文件已合并。
 
-每一步都要保留真实命令与输出摘要。迁移不得降低现有断言：幂等、停止确认、UNKNOWN、授权与 TOML 绑定检查全部保留。
-
-## 未决与风险
-
-- 公开名称定为 `wrs_node/tts_node/agent_node/voice_node`，避免 `wrs` 与第三方包及 `wrs_agent.env.wrs` 混淆；`agent_node(provider=...)` 取代 `model_provider`，按本仓库既有做法不保留旧别名，仓库内调用方同步迁移。
-- `launch()` 的调用点很多（examples 与 tests 合计约 57 个文件），但绝大多数是裸调用或只带 `backend=`，迁移主要是机械替换；实际改动量要在第 5 步统计后记录。
-- `[nodes.<id>.options]` 让配置有两个来源。风险由「TOML 只给默认值、spec 逐键覆盖、授权字段不可被 options 触碰」三条约束控制，实现时必须有覆盖顺序的回归测试。
-- 本设计只整理本机进程启动。跨机部署、动态接纳未配置节点、一个角色多实例仍然不在范围内。
-- 本文写成后新增了可选 `asr` 角色（麦克风与识别在自己的进程，见 [文本合同](VOICE_INPUT.md)）。它复用了同一套待重构的机制：`asr_backend/asr_python/asr_script/asr_vocabulary` 又穿过同样的六层转发，`node_command` 的解释器替换和 `_wait_ready` 的 300 秒条件都改成了 tts/asr 共用的查表。迁移时需要 `asr_node()` 与 `AsrOptions`，这两处共用逻辑应一起收进推导表，不要再按角色写第三份。
+配置类由 nodes.<role>.node 导入，共用模型资源工具由 nodes.model_assets 导入。
+旧 register_asr/register_voice 已移除；节点通过 setup/teardown 管理自己的方法和状态。
+上面的 speech 包迁移仅描述历史目录调整。当前动态发现改动另行调整了 Node 构造参数、
+节点描述字段和发现路径，并使 launch 清单与 connect 的运行时目录分离；用法见本文前半部分。
+默认模型目录和语音解释器目录保持原样，已有模型校验回执仍可用。

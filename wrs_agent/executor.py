@@ -3,23 +3,28 @@
 import asyncio
 import contextlib
 import inspect
+import threading
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 
 from wrs_agent.errors import AgentError, error_info
 from wrs_agent.schemas import (
+    MAX_BYTES,
     ActionContext,
     ActionReceipt,
     ActionRequest,
     ActionState,
     ActionStatus,
-    CapabilitySnapshot,
     ControlReceipt,
     ControlRequest,
+    FeatureSnapshot,
     NodeSnapshot,
+    SkillCheck,
+    SkillCheckResult,
     new_id,
 )
-from wrs_agent.skills import validate_skill
+from wrs_agent.skills import Skill, validate_skill
 from wrs_agent.store import Journal
 
 
@@ -28,7 +33,14 @@ class SkillFailure(ValueError):
 
 
 class ExecutionUnknown(RuntimeError):
-    """Backend effect/stop cannot be confirmed; admission must remain closed."""
+    """Backend effect/stop cannot be confirmed; admission must remain closed.
+
+    The diagnostic message stays local. reason is a fixed public code chosen by the backend.
+    """
+
+    def __init__(self, message, *, reason="backend_state_unknown"):
+        super().__init__(message)
+        self.reason = reason
 
 
 class ActionExecutor:
@@ -37,36 +49,32 @@ class ActionExecutor:
         journal_path,
         *,
         state,
-        skills,
+        skills=(),
         backend,
-        duration=0.4,
-        fault=None,
         close_backend=None,
-        capabilities_extra=None,
+        features_extra=None,
     ):
-        self.skills = dict(skills)
-        if not self.skills or any(
-            name != entry.spec.name
-            or not callable(entry.handler)
-            or entry.spec.parameters != entry.arguments.model_json_schema()
-            for name, entry in self.skills.items()
-        ):
-            raise ValueError("invalid_skill_registration")
+        self.skills = {}
+        self.skill_revision = 0
+        self._skill_thread = threading.get_ident()
+        self._closed = False
+        if isinstance(skills, Mapping):
+            raise TypeError("skills_sequence_required")
+        self.add_skills(*skills)
         self.boot_id = new_id()
         self.epoch = 0
         self.journal = Journal(journal_path)
         self.records = self.journal.records.copy()
         self.world = state
         self.close_backend = close_backend
-        self.capabilities_extra = capabilities_extra or {}
+        self.features_extra = features_extra or {}
         self.backend = backend
-        self.node_id = "wrs" if self.capabilities().robot_controls else "tts"
-        self.admission = "HELD" if self.records and self.capabilities().robot_controls else "OPEN"
+        self.node_id = "wrs" if self.features().robot_controls else "tts"
+        self.admission = "HELD" if self.records and self.features().robot_controls else "OPEN"
         self.stop_confirmed = True
         if any(s.state == ActionState.UNKNOWN for _, s in self.records.values()):
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
-        self.duration, self.fault = duration, fault
         self.active = None
         self.runner = None
         self.stop_signal = asyncio.Event()
@@ -76,12 +84,55 @@ class ActionExecutor:
         self.executions = 0
         self.on_event = lambda suffix, event: None
 
-    def capabilities(self):
-        return CapabilitySnapshot(
-            skills={name: entry.spec.version for name, entry in sorted(self.skills.items())},
+    def add_skills(self, *skills):
+        """Atomically append reviewed local bindings on the owning thread.
+
+        Startup uses this same check. Existing names cannot be replaced, so
+        in-flight actions and plans keep their original implementation.
+        """
+        if self._closed or threading.get_ident() != self._skill_thread:
+            raise RuntimeError("skill_registration_outside_owner")
+        pending = {}
+        for entry in skills:
+            if not isinstance(entry, Skill) or not callable(entry.handler):
+                raise ValueError("invalid_skill_registration")
+            name = entry.name
+            if name in self.skills or name in pending:
+                raise ValueError("duplicate_skill")
+            pending[name] = entry
+        combined = {**self.skills, **pending}
+        if len(combined) > 64:
+            raise ValueError("invalid_skill_count")
+        # Leave room for feature metadata and the transport envelope.
+        payload_size = sum(len(s.spec.model_dump_json().encode()) for s in combined.values())
+        if payload_size > MAX_BYTES - 8192:
+            raise ValueError("skill_catalog_too_large")
+        if pending:
+            self.skills = combined
+            self.skill_revision += 1
+
+    def validate(self, request: SkillCheck):
+        request = SkillCheck.model_validate_json(request.model_dump_json())
+        if request.boot_id != self.boot_id:
+            raise AgentError("node_instance_changed")
+        for step in request.steps:
+            try:
+                validate_skill(step.skill, step.version, step.args, registry=self.skills)
+            except AgentError as exc:
+                raise AgentError(exc.error.model_copy(
+                    update={"node_id": self.node_id, "stage": "preflight"},
+                )) from None
+        return SkillCheckResult(boot_id=self.boot_id, count=len(request.steps))
+
+    def features(self):
+        return FeatureSnapshot(
+            skills={name: entry.version for name, entry in sorted(self.skills.items())},
             backend=self.backend,
-            **self.capabilities_extra,
-            resources=sorted({r for entry in self.skills.values() for r in entry.spec.resources}),
+            boot_id=self.boot_id,
+            skill_revision=self.skill_revision,
+            specs={name: entry.spec for name, entry in self.skills.items()},
+            **self.features_extra,
+            resources=sorted({r for entry in self.skills.values() for r in entry.resources}),
         )
 
     def snapshot(self):
@@ -107,7 +158,7 @@ class ActionExecutor:
     def _finish_cancel(self):
         # TTS cancellation ends one utterance. New work still needs a fresh epoch/lease.
         if (
-            not self.capabilities().robot_controls
+            not self.features().robot_controls
             and self.admission == "HELD"
             and self.stop_confirmed
         ):
@@ -256,16 +307,10 @@ class ActionExecutor:
                     self._status(aid, ActionState.RUNNING, progress=value)
                     self.on_event("state/world", self.snapshot().model_dump())
 
-            if self.duration > 0:
-                try:
-                    await asyncio.wait_for(self.stop_signal.wait(), timeout=self.duration)
-                except TimeoutError:
-                    pass
             if (
                 not self.stop_signal.is_set()
                 and request.control_epoch == self.epoch
                 and self.admission == "OPEN"
-                and self.fault not in {"unknown", "inconclusive"}
             ):
                 result = self.skills[request.skill].handler(
                     self.world,
@@ -279,22 +324,12 @@ class ActionExecutor:
                 or request.control_epoch != self.epoch
                 or self.admission != "OPEN"
             ):
-                if self.fault == "stop_unknown":
-                    self.admission = "UNKNOWN"
-                    self.stop_confirmed = False
-                    self._status(aid, ActionState.UNKNOWN, "stop_unconfirmed", "INCONCLUSIVE")
-                else:
-                    self.stop_confirmed = True
-                    self._status(aid, ActionState.CANCELLED, "controlled_stop")
-                return
-            if self.fault in {"unknown", "inconclusive"}:
-                self.admission = "UNKNOWN"
-                self.stop_confirmed = False
-                self._status(aid, ActionState.UNKNOWN, "observation_inconclusive", "INCONCLUSIVE")
+                self.stop_confirmed = True
+                self._status(aid, ActionState.CANCELLED, "controlled_stop")
                 return
             self.world.version += 1
             self._status(aid, ActionState.VERIFYING)
-            # No await between virtual effect and verification: one state owner.
+            # The backend returns only after checking its postcondition.
             self._status(
                 aid,
                 ActionState.SUCCEEDED if verified else ActionState.FAILED,
@@ -309,10 +344,10 @@ class ActionExecutor:
             raise
         except SkillFailure as exc:
             self._status(aid, ActionState.FAILED, str(exc), "FAIL")
-        except ExecutionUnknown:
+        except ExecutionUnknown as exc:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
-            self._status(aid, ActionState.UNKNOWN, "backend_state_unknown", "INCONCLUSIVE")
+            self._status(aid, ActionState.UNKNOWN, exc.reason, "INCONCLUSIVE")
         except Exception:
             if self.status(aid).state != ActionState.UNKNOWN:
                 self._status(aid, ActionState.FAILED, "precondition_or_execution_failed", "FAIL")
@@ -412,6 +447,7 @@ class ActionExecutor:
         return await self.control("allow_actions", request)
 
     async def close(self):
+        self._closed = True
         if self.active:
             await self.hold(
                 ControlRequest(

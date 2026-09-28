@@ -3,10 +3,11 @@ import threading
 import pytest
 from conftest import action, control, eventually
 
-from wrs_agent.actions import SkillFailure
 from wrs_agent.env import wrs as adapter
 from wrs_agent.errors import AgentError
+from wrs_agent.executor import SkillFailure
 from wrs_agent.skills import validate_skill
+from wrs_agent.skills.robot import SKILLS
 
 
 @pytest.mark.parametrize(
@@ -25,11 +26,11 @@ from wrs_agent.skills import validate_skill
 )
 def test_relative_move_rejects_invalid_or_unbounded_offset(args):
     with pytest.raises(AgentError, match="invalid_arguments"):
-        validate_skill("move_relative", 1, args)
+        validate_skill("move_relative", 1, args, registry=SKILLS)
 
 
 def test_relative_move_has_meter_defaults_and_combined_bound():
-    args = validate_skill("move_relative", 1, {"dx": 0.06, "dz": 0.08})
+    args = validate_skill("move_relative", 1, {"dx": 0.06, "dz": 0.08}, registry=SKILLS)
     assert (args.dx, args.dy, args.dz) == (0.06, 0.0, 0.08)
 
 

@@ -6,9 +6,10 @@ from pathlib import Path
 from examples._session import use_local_token
 from examples.voice.commands import addressed_text
 from wrs_agent import AgentError, System
+from wrs_agent.nodes.asr.capture import record_command
+from wrs_agent.nodes.asr.qwen import QwenASR
 from wrs_agent.policy import text_intent
 from wrs_agent.schemas import TERMINAL, TextInput
-from wrs_agent.speech.asr import QwenASR, record_command
 
 CONFIG = Path(__file__).with_name("wrs_bindings.toml")
 

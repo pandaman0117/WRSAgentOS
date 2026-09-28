@@ -10,11 +10,12 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from wrs_agent.bindings import load_bindings
+from wrs_agent.instance_lock import InstanceLock as InstanceLock
+from wrs_agent.nodes.serve import NODES, node_options
 from wrs_agent.schemas import new_id
 from wrs_agent.system import System
 
@@ -24,34 +25,6 @@ ROUTER = ROOT / f".local/zenoh-{ROUTER_VERSION}" / (
     "zenohd.exe" if os.name == "nt" else "zenohd"
 )
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-class InstanceLock:
-    def __init__(self, name):
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", name):
-            raise ValueError("invalid_instance_name")
-        path = Path(tempfile.gettempdir()) / "wrs-agent-locks" / f"{name}.lock"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.file = path.open("a+b")
-        if path.stat().st_size == 0:
-            self.file.write(b"0")
-            self.file.flush()
-        self.file.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            self.file.close()
-            raise RuntimeError("node_already_running") from None
-
-    def close(self):
-        self.file.close()
 
 
 def python_command(*args):
@@ -104,9 +77,7 @@ class LocalStack:
         port=0,
         site="local",
         env_id=None,
-        deferred=False,
         backend="mock",
-        model_provider="mock",
         live_model=False,
         bindings=None,
         scene=None,
@@ -118,17 +89,16 @@ class LocalStack:
         asr_script=(),
         asr_vocabulary=(),
     ):
-        if backend not in {"mock", "wrs"}:
-            raise ValueError("unsupported_backend")
-        if model_provider not in {"mock", "llm"} or (model_provider == "llm" and not live_model):
-            raise ValueError("invalid_model_provider_or_missing_live_opt_in")
-        if tts_backend not in {"mock", "qwen"}:
-            raise ValueError("unsupported_tts_backend")
-        if asr_backend not in {"mock", "qwen"}:
-            raise ValueError("unsupported_asr_backend")
-        self.tts_backend, self.asr_backend = tts_backend, asr_backend
-        self.tts_prepared_texts = tuple(tts_prepared_texts)
-        self.asr_script, self.asr_vocabulary = tuple(asr_script), tuple(asr_vocabulary)
+        arguments = {
+            "backend": backend, "duration": duration, "fault": fault, "scene": scene,
+            "live_model": live_model, "tts_backend": tts_backend,
+            "tts_prepared_texts": tts_prepared_texts, "asr_backend": asr_backend,
+            "asr_script": asr_script, "asr_vocabulary": asr_vocabulary,
+        }
+        self.options = {
+            role: node.options_type.model_validate(node_options(role, arguments))
+            for role, node in NODES.items()
+        }
         self.tts_python = Path(tts_python).resolve() if tts_python else None
         self.asr_python = Path(asr_python).resolve() if asr_python else None
         relative = "Scripts/python.exe" if os.name == "nt" else "bin/python"
@@ -139,16 +109,10 @@ class LocalStack:
         for interpreter in (self.tts_python, self.asr_python):
             if interpreter is not None and not interpreter.is_file():
                 raise FileNotFoundError("Run scripts/setup_speech.ps1 first: " + str(interpreter))
-        self.model_provider, self.live_model = model_provider, live_model
         self.backend = backend
         self.scene_path = Path(scene).resolve() if scene is not None else None
         if self.scene_path is not None:
-            if backend != "wrs":
-                raise ValueError("scene_requires_wrs_backend")
-            from wrs_agent.scene import load_scene
-
-            load_scene(self.scene_path)  # Fail before spawning processes.
-        self.duration, self.fault, self.deferred = duration, fault, deferred
+            self.options["wrs"] = self.options["wrs"].model_copy(update={"scene": self.scene_path})
         self.system = None
         self._connection = None
         self.started = []
@@ -163,12 +127,12 @@ class LocalStack:
                 self.roles[role] = name
         if self.scene_path is not None and "wrs" not in self.roles:
             raise ValueError("scene_requires_wrs_node")
-        if any(role not in {"wrs", "tts", "agent", "voice", "asr"} for role in self.roles):
+        if any(role not in NODES for role in self.roles):
             raise ValueError("node_type_not_implemented")
-        if "voice" in self.roles and not {"wrs", "tts", "agent"}.issubset(self.roles):
-            raise ValueError("voice_requires_wrs_tts_agent")
-        if "asr" in self.roles and "voice" not in self.roles:
-            raise ValueError("asr_requires_voice")
+        for role in self.roles:
+            required = NODES[role].requires
+            if not set(required).issubset(self.roles):
+                raise ValueError(f"{role}_requires_{'_'.join(required)}")
         self.port, self.site = port, site
         self.env_id = env_id or backend + "-" + new_id()[:12]
         if not all(
@@ -241,56 +205,34 @@ class LocalStack:
 
     def node_command(self, role):
         result = python_command(
-            "-m",
-            "wrs_agent",
-            role,
-            "--endpoint",
-            self.endpoint,
-            "--site",
-            self.site,
-            "--env-id",
-            self.env_id,
-            "--journal",
-            self.directory / f"{role}.sqlite3",
-            "--duration",
-            self.duration,
+            "-m", "wrs_agent", role,
+            "--endpoint", self.endpoint,
+            "--site", self.site,
+            "--env-id", self.env_id,
+            "--journal", self.directory / f"{role}.sqlite3",
+            "--node-id", self.roles[role],
+            "--options", self.options[role].model_dump_json(),
         )
-        result.extend(["--node-id", self.roles[role]])
-        if self.bindings_path:
-            result.extend(["--bindings", str(self.bindings_path)])
-        if role == "wrs":
-            result.extend(["--backend", self.backend])
-            if self.scene_path is not None:
-                result.extend(["--scene", str(self.scene_path)])
-        if role == "agent" and self.model_provider == "llm":
-            result.extend(["--model-provider", "llm", "--live-model"])
-        if self.deferred and role == "agent":
-            result.append("--deferred-planner")
-        if role == "tts":
-            result.extend(["--tts-backend", self.tts_backend])
-            for text in self.tts_prepared_texts:
-                result.extend(["--tts-prepare", text])
-        if role == "asr":
-            result.extend(["--asr-backend", self.asr_backend])
-            for text in self.asr_script:
-                result.extend(["--asr-script", text])
-            for word in self.asr_vocabulary:
-                result.extend(["--asr-vocabulary", word])
+        definition = self.definitions[self.roles[role]]
+        result.extend([
+            "--suffix=" + definition["suffix"],
+            "--actions" if definition["actions"] else "--no-actions",
+            "--peers", json.dumps({name: self.roles[name] for name in NODES[role].requires}),
+            "--skill-bindings", json.dumps(self.skill_bindings),
+        ])
         interpreter = {"tts": self.tts_python, "asr": self.asr_python}.get(role)
         if interpreter is not None:
             # The optional speech nodes use their own deps, without .local/deps or -S.
             result = [str(interpreter), "-X", "utf8", *result[result.index("-m"):]]
-        if self.fault:
-            result.extend(["--fault", self.fault])
         return result
 
-    async def _wait_ready(self, bus, key, *, seconds=10):
+    async def _wait_ready(self, node_id, *, seconds=10):
         async with asyncio.timeout(seconds):
             while True:
                 if any(p.poll() is not None for p in self.processes):
                     raise RuntimeError(f"Node exited; see {self.directory}")
                 try:
-                    return await bus.request(key, {}, timeout=0.5)
+                    return await self.system.registry.wait_for(node_id, timeout=0.5)
                 except TimeoutError:
                     await asyncio.sleep(0.02)
 
@@ -303,29 +245,24 @@ class LocalStack:
                 site=self.site,
                 env_id=self.env_id,
                 _token=self.token,
-                _config=(self.definitions, self.skill_bindings),
+                peers=self.roles,
+                skill_bindings=self.skill_bindings,
             )
             self.system = await self._connection.__aenter__()
             self.system._local_stack = self
-            # Only enabled TOML nodes start. Order keeps existing Voice dependencies explicit.
-            for role in ("wrs", "tts", "agent", "voice", "asr"):
-                if role not in self.roles:
-                    continue
-                node_id = self.roles[role]
-                self._spawn(role, self.node_command(role))
-                self.started.append(node_id)
-                key = (
-                    "request/capabilities"
-                    if self.definitions[node_id]["actions"]
-                    else "request/task/status"
-                    if role == "agent"
-                    else "request/health"
-                )
-                # Resident speech models load before readiness, not inside the first request.
-                loads_model = {"tts": self.tts_backend, "asr": self.asr_backend}.get(role) == "qwen"
-                await self._wait_ready(
-                    self.system._transports[node_id], key, seconds=300 if loads_model else 10
-                )
+            # Process creation order is stable for diagnostics; initialization is concurrent.
+            for role in NODES:
+                if role in self.roles:
+                    self._spawn(role, self.node_command(role))
+                    self.started.append(self.roles[role])
+            # Dependent nodes share the model loader's deadline, including Voice -> ASR.
+            startup_seconds = 300 if any(
+                getattr(self.options[role], "backend", None) == "qwen" for role in self.roles
+            ) else 10
+            async with asyncio.TaskGroup() as readiness:
+                for node_id in self.roles.values():
+                    readiness.create_task(self._wait_ready(node_id, seconds=startup_seconds))
+            await self.system.nodes()
             return self
         except BaseException:
             await self.__aexit__(None, None, None)
@@ -335,10 +272,9 @@ class LocalStack:
         try:
             if self.system is not None:
                 for node_id in reversed(self.started):
-                    role = self.definitions[node_id]["type"]
                     with contextlib.suppress(Exception):
-                        await self.system._transports[node_id].request(
-                            f"request/{role}/shutdown",
+                        await self.system.registry.transport(node_id).request(
+                            f"request/node/{node_id}/shutdown",
                             {},
                             timeout=1,
                             control=True,

@@ -6,18 +6,19 @@ import pytest
 from conftest import eventually, submit_request
 
 from wrs_agent import System, step
+from wrs_agent.registry import discovery_prefix
 from wrs_agent.schemas import ActionRequest, new_id
 from wrs_agent.transport import Transport
 
 pytestmark = pytest.mark.zenoh
 
 
-async def test_native_leave_restart_invalidates_capabilities_and_old_authority(monkeypatch):
+async def test_native_leave_restart_invalidates_features_and_old_authority(monkeypatch):
     async with System.launch(duration=0.05) as system:
         nodes = await system.nodes()
         stack, view = system._local_stack, system.registry
         client = system.clients["tts"]
-        original = client.capabilities
+        original = client.features
         calls = 0
 
         async def counted():
@@ -25,10 +26,10 @@ async def test_native_leave_restart_invalidates_capabilities_and_old_authority(m
             calls += 1
             return await original()
 
-        monkeypatch.setattr(client, "capabilities", counted)
-        await view.capabilities("tts", client)
+        monkeypatch.setattr(client, "features", counted)
+        await view.features("tts", client)
         await view.refresh(["tts"])
-        await view.capabilities("tts", client)
+        await view.features("tts", client)
         assert calls == 1
         old = await client.context()
         stale = ActionRequest(
@@ -43,16 +44,16 @@ async def test_native_leave_restart_invalidates_capabilities_and_old_authority(m
             args={"text": "old request"},
         )
         worker = stack.processes[2]
-        await client.transport.request("request/tts/shutdown", {}, control=True)
+        await client.transport.request("request/node/tts/shutdown", {}, control=True)
         await asyncio.to_thread(worker.wait, timeout=3)
         await eventually(view.snapshot, lambda items: items["tts"]["health"] == "offline")
         assert "tts" not in view._caps
         stack.processes.remove(worker)
         stack._spawn("tts-restarted", stack.node_command("tts"))
-        await stack._wait_ready(client.transport, "request/capabilities")
+        await stack._wait_ready("tts")
         fresh = await eventually(system.nodes, lambda items: items["tts"]["ready"])
         assert fresh["tts"]["boot_id"] != nodes["tts"]["boot_id"]
-        await view.capabilities("tts", client)
+        await view.features("tts", client)
         assert calls == 2
         receipt = await submit_request(client, stale)
         assert not receipt.accepted and receipt.reason == "stale_boot"
@@ -61,24 +62,31 @@ async def test_native_leave_restart_invalidates_capabilities_and_old_authority(m
         assert (await client.transport.request("request/health", {}))["executions"] == 1
 
 
-async def test_native_duplicate_instance_fails_closed_and_unknown_node_is_not_bound():
+async def test_native_duplicate_instance_fails_closed_and_unverified_node_is_not_bound():
     async with System.launch(duration=0.05) as system:
         stack = system._local_stack
         before = await system.nodes()
         bus = system.clients["wrs"].transport
         duplicate = Transport(stack.endpoint, stack.site, bus.env_id, stack.token, "presence-test")
         tokens = []
+        prefix = discovery_prefix(duplicate, stack.env_id)
         try:
             tokens.append(
-                duplicate.session.liveliness().declare_token(bus.key("presence/ghost/boot"))
+                duplicate.session.liveliness().declare_token(
+                    f"{prefix}ghost/{stack.env_id}-ghost/boot"
+                )
             )
             tokens.append(
-                duplicate.session.liveliness().declare_token(bus.key("presence/wrs/other-instance"))
+                duplicate.session.liveliness().declare_token(
+                    f"{prefix}wrs/{bus.env_id}/other-instance"
+                )
             )
             ambiguous = await eventually(
                 system.registry.snapshot, lambda nodes: nodes["wrs"]["health"] == "unknown"
             )
-            assert "ghost" not in ambiguous and not ambiguous["wrs"]["ready"]
+            assert not ambiguous["wrs"]["ready"]
+            observed = await system.nodes()
+            assert not observed["ghost"]["ready"] and "ghost" not in system.clients
             with pytest.raises(ValueError, match="node_ambiguous"):
                 await system.action("move_named_pose", pose="B")
             assert (await bus.request("request/health", {}))["executions"] == 0

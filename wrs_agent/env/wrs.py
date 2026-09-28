@@ -5,15 +5,14 @@ import site
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from functools import partial
 from math import pi
 from pathlib import Path
 
-from wrs_agent.actions import ActionExecutor, ExecutionUnknown, SkillFailure
+from wrs_agent.executor import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.scene import load_scene
 from wrs_agent.schemas import ObjectData, RobotData, SceneData
-from wrs_agent.skills import SKILLS
+from wrs_agent.skills.robot import SKILLS
 
 ROOT = Path(__file__).resolve().parents[2]
 # "home" must equal UR7E.home_qs: the model starts there and reports pose="home".
@@ -300,15 +299,12 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
         journal_path,
         state=state,
         close_backend=close,
-        skills={
-            name: replace(
-                SKILLS[name], handler=partial(advance_virtual, call, model, duration, name)
-            )
+        skills=[
+            SKILLS[name].bind(partial(advance_virtual, call, model, duration, name))
             for name in ROBOT_SKILLS
-        },
-        duration=0,  # This backend advances itself; no Mock delay before motion.
+        ],
         backend="wrs",
-        capabilities_extra={
+        features_extra={
             "verification": "wrs_fk",
             "stop_scope": "virtual_fk_boundary",
             "controller_flush": False,

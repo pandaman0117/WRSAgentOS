@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -86,10 +87,18 @@ def test_sync_skill_lookup_uses_current_nodes_without_executing_or_planning():
         }
 
 
-def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids():
-    with launch(duration=0.02) as system:
+def test_sync_goals_reuse_verified_remote_plans_with_fresh_action_ids(llm_server):
+    with launch(live_model=True, duration=0.02) as system:
         counts = []
         for goal in ["put A in B", "put A in B", "put A in B", "put A in C"]:
+            # The HTTP fixture explicitly supplies the target for this case.
+            if goal == "put A in C":
+                call = llm_server.response["choices"][0]["message"]["tool_calls"][0]["function"]
+                proposal = json.loads(call["arguments"])
+                for item in proposal["plan"]["steps"]:
+                    if "target" in item.get("args", {}):
+                        item["args"]["target"] = "C"
+                call["arguments"] = json.dumps(proposal)
             ack = system.goal(goal)
             assert ack.request_id
             planned = ack.wait()

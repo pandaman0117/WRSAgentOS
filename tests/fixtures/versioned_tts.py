@@ -4,10 +4,10 @@ import asyncio
 from dataclasses import replace
 
 from wrs_agent.__main__ import main
-from wrs_agent.skills import SKILLS
+from wrs_agent.skills.speech import SKILLS
 
 SKILLS["speak"] = replace(
-    SKILLS["speak"], spec=SKILLS["speak"].spec.model_copy(update={"version": 2})
+    SKILLS["speak"], version=2
 )
 
 if __name__ == "__main__":

@@ -9,7 +9,6 @@ Voice 已是独立 Zenoh 节点，处理已识别的文字、停止意图和控�
 | [01_text_stop_task.py](01_text_stop_task.py) | 文字“停止”取消正在执行的 WRS 任务 |
 | [02_text_stop_speech.py](02_text_stop_speech.py) | 文字“别说了”只停止模拟 TTS，WRS 继续 |
 | [03_text_query.py](03_text_query.py) | 文字查询任务进度 |
-| [04_text_goal.py](04_text_goal.py) | 确定性规划模板展示 goal 句柄，不访问在线模型 |
 
 这些是控制语义例子，不录音；02 的模拟 TTS 不出声。真实播放看 [TTS 例子](../tts/README.md)。
 

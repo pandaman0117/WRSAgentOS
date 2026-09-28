@@ -16,7 +16,6 @@
 |---|---|---|
 | [01_action.py](beginner/01_action.py) | 提交动作并等待 | SUCCEEDED，姿态 B |
 | [02_skills.py](beginner/02_skills.py) | 查看可用技能和合同版本 | 名称、版本、描述 |
-| [03_cancel_action.py](beginner/03_cancel_action.py) | 取消一次 Mock 播报 | CANCELLED |
 | [04_invalid_input.py](beginner/04_invalid_input.py) | 读取参数错误 | invalid_arguments |
 
 ## 任务
@@ -27,11 +26,10 @@
 | [02_parallel.py](tasks/02_parallel.py) | 运动与播报同时执行 | 同时出现 2 个活动动作 |
 | [03_cancel.py](tasks/03_cancel.py) | 取消结束后开始新任务 | 旧 CANCELLED，新 SUCCEEDED |
 | [04_watch.py](tasks/04_watch.py) | 观察任务进度 | 状态变化到 SUCCEEDED |
-| [05_goal.py](tasks/05_goal.py) | 等规划，再等执行 | DONE → SUCCEEDED |
 
 任务结果可用 `TaskState.SUCCEEDED` 等枚举成员判断，动作和规划结果分别使用 `ActionState`、`GoalState`；打印仍显示原字符串。取消示例演示这种写法，完整约定见 [状态枚举](../docs/task_handles.md#state-的字符串枚举)。
 
-`after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。机器人动作由实际 WRS 模型执行。tasks/05 和 voice/04 使用确定的 home 规划模板，只教学规划句柄；在线模型见 models。这一组控制语义例子中的 TTS 为 Mock，不产生声音；真实 Qwen 播报见 [tts](tts/README.md)。
+`after` 表示步骤依赖；没有依赖、使用不同节点的步骤可以并行。机器人动作由实际 WRS 模型执行。自然语言规划使用 [在线模型示例](models/01_plan.py)，执行见 [02_execute.py](models/02_execute.py)。这一组控制语义例子中的 TTS 为 Mock，不产生声音；真实 Qwen 播报见 [tts](tts/README.md)。
 
 ## 语音入口
 
@@ -40,7 +38,6 @@
 | [01_text_stop_task.py](voice/01_text_stop_task.py) | 任务运行时收到“停止” |
 | [02_text_stop_speech.py](voice/02_text_stop_speech.py) | “别说了”只停止播报，机器人继续 |
 | [03_text_query.py](voice/03_text_query.py) | “做到哪一步了”查询进度 |
-| [04_text_goal.py](voice/04_text_goal.py) | 已识别文本成为规划目标 |
 
 这些例子直接传入已识别文本，不采集麦克风。ASR 或 UI 接入后调用同一个 `send_text()`。明确停止走控制路径，不等待模型。受理不等于停止完成，最终结果用任务或动作句柄查询。
 
@@ -77,30 +74,19 @@
 
 ## connect
 
-这一组区分“拥有服务”和“连接服务”。确保回环端口 7447 空闲，先服务后客户端；本机示例自动准备和共享口令，无需手动设置环境变量。
-
-终端一运行 [01_start_system.py](connect/01_start_system.py)，保持运行：
-
-```powershell
-./scripts/run.ps1 examples/connect/01_start_system.py
-```
-
-看到“TTS 已就绪”后，终端二运行 [02_client.py](connect/02_client.py)：
-
-```powershell
-./scripts/run.ps1 examples/connect/02_client.py
-```
-
-客户端完成一次播报后退出，服务继续运行。终端一按 Ctrl+C 关闭自己拥有的节点和 Router。地址、配置路径和 env_id 都直接写在两份代码中。
+`launch()` 拥有节点，`connect()` 只拥有客户端连接；客户端退出不会关闭服务。
+直接参考 [WRS 服务](wrs/05_start_node.py) 与 [控制客户端](wrs/06_control_arm.py)，
+或 [真实 TTS 服务与客户端](tts/README.md)。Mock 服务脚本只作为跨进程测试夹具保留在
+`tests/fixtures/connect/`，不再作为播报示例。
 
 ## nodes
 
-这一组交给开发新节点与技能的同学。`speaker` 是独立 TTS 角色节点，只提供 `greet`，逐字打印问候，不播放声音。Agent 是另一个进程，使用既有 Runtime 调度。
+这一组交给开发新节点与技能的同学。`speaker` 是继承 Node 的独立 custom 节点，只提供 `greet`，逐字打印问候，不播放声音。Agent 是另一个进程，使用既有 Runtime 调度。Node 管理连接与退出，子类在 setup 中绑定执行器，见 [节点实现与启动](../docs/NODE_LAUNCH.md)。
 
 | 文件 | 职责 |
 |---|---|
 | [greet_skill.py](nodes/greet_skill.py) | 唯一参数合同、技能描述和可取消处理函数 |
-| [bindings.toml](nodes/bindings.toml) | 节点实例与技能绑定 |
+| [bindings.toml](nodes/bindings.toml) | 节点实例与端点；技能自动发现 |
 | [router.json5](nodes/router.json5) | 本组 Router 配置，回环端口 7448 |
 | [00_start_router.py](nodes/00_start_router.py) | 终端一：Router |
 | [01_start_speaker.py](nodes/01_start_speaker.py) | 终端二：技能执行节点 |
@@ -108,6 +94,9 @@
 | [03_call_skill.py](nodes/03_call_skill.py) | 终端四：调用一次 greet |
 | [04_task.py](nodes/04_task.py) | 终端四：通过任务调用 greet |
 | [05_cancel.py](nodes/05_cancel.py) | 终端四：取消正在打印的问候 |
+| [06_late_node.py](nodes/06_late_node.py) | 单独运行：Agent 先启动，未预登记的节点随后加入，直接调用与任务调用 |
+
+`06_late_node.py` 自行启动并清理本机环境，无需先运行其他文件。其余文件演示分别启动与连接；部署文件仅作启动便利，不限制运行中的节点发现。
 
 本机 Speaker 首次启动时自动准备本组口令，Agent 和客户端复用；不需要手动设置。若自行配置 `WRS_AGENT_TOKEN`，各程序必须使用同值，自动配置不会覆盖它：
 
@@ -142,7 +131,7 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 
 `03_call_skill.py` 至少需要 Router 和 Speaker 已就绪；任务和取消示例还需要 Agent。首次先运行客户端时，会提示应启动哪个服务；已有口令文件不表示服务仍在运行。
 
-新增技能主要改合同与处理函数、节点创建信息和绑定，不需要修改 Runtime。详细边界见 [开发交接](../docs/DEVELOPMENT.md)。
+往已有节点新增技能只改包内定义与后端实现/绑定；Agent、客户端和普通 TOML 无需修改。详细边界见 [开发交接](../docs/DEVELOPMENT.md)。
 
 ## 模型
 
@@ -160,7 +149,7 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 ./scripts/run.ps1 examples/models/02_execute.py
 ```
 
-缺少凭据时在启动节点前报错。`models/fixtures/` 只是测试使用的协议样本，示例不读取。自动验收不会执行在线调用；运行结果可能是计划、澄清或结构化失败，不能保证模型总能给出可执行计划。
+缺少凭据时在启动节点前报错。协议回归样本位于 `tests/fixtures/models/`，示例不读取。自动验收不会执行在线调用；运行结果可能是计划、澄清或结构化失败，不能保证模型总能给出可执行计划。
 
 ## 底层通信
 
@@ -181,7 +170,7 @@ IDE 默认也使用同一仓库的自动口令。只有选择手动配置时，�
 
 启动脚本在 `if __name__ == "__main__"` 中普通调用 `use_local_token(...)`，随后才 `asyncio.run(main())`。这项一次性的启动配置不需要线程切换，也不放进异步业务主流程；直接导入示例不会生成文件。
 
-单脚本 `launch()` 已自动生成随机口令并传给自己的子进程。分开运行的 connect、nodes、wrs 示例通过 [本机配置函数](_session.py) 共享口令：首次启动服务生成，保存到仓库的 `.local/example_tokens/<组名>.token`；同一仓库的配套客户端自动读取。三组互相隔离，重启沿用同一配置。口令不打印、不写日志，`.local/` 已被 Git 忽略；不修改你的 `.env`。这些文件是本机配置，不要提交或分享。
+单脚本 `launch()` 已自动生成随机口令并传给自己的子进程。分开运行的 nodes、wrs、tts、voice 示例通过 [本机配置函数](_session.py) 共享口令：首次启动服务生成，保存到仓库的 `.local/example_tokens/<组名>.token`；同一仓库的配套客户端自动读取。四组互相隔离，重启沿用同一配置。口令不打印、不写日志，`.local/` 已被 Git 忽略；不修改你的 `.env`。这些文件是本机配置，不要提交或分享。
 
 这个帮助函数只在受信任的回环示例中调用，不是跨机或实机凭据管理；Runtime/Transport 的鉴权仍保留，普通 `connect()` 仍要求显式环境凭据。POSIX 文件权限为 0600；Windows 继承工作区目录 ACL，不声称隔离其他有权读取此工作区的用户。
 
@@ -218,7 +207,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 | 目录 | 从哪里开始 |
 |---|---|
 | [wrs](wrs/README.md) | 运动、停止、场景快照和 WRS 显示，01–08 |
-| [voice](voice/README.md) | 文字控制 01–04；本地按键语音 05–06；在线模型循环语音 07–09 |
+| [voice](voice/README.md) | 文字控制 01–03；本地按键语音 05–06；在线模型循环语音 07–09 |
 | [tts](tts/README.md) | 01 启动并播报预热；02 说话；03 取消合成/播放 |
 
 原 wrs/08、09 移至 [voice/05](voice/05_start_wrs_voice.py)、[voice/06](voice/06_push_to_talk.py)，配合 [wrs/07_viewer.py](wrs/07_viewer.py)。在线语音采用另一地址与自己的 viewer，避免误连本地规划模板。安装和下载见 [Qwen 指南](../docs/QWEN_SPEECH.md)。自动验收不会启动麦克风、扬声器或付费模型。

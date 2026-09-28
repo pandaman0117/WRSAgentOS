@@ -1,11 +1,11 @@
-"""客户端、Agent 和节点共同导入的 greet 技能合同与实现。"""
+"""仅执行节点导入的 greet 技能定义与实现；客户端从节点发现合同。"""
 
 import asyncio
 
 from pydantic import Field
 
 from wrs_agent.schemas import Boundary
-from wrs_agent.skills import SKILLS, Skill, SkillSpec
+from wrs_agent.skills import Skill
 
 
 class GreetArgs(Boundary):
@@ -32,21 +32,10 @@ async def greet(state, options: GreetArgs, stop, progress):
 
 
 GREET = Skill(
-    spec=SkillSpec(
-        name="greet",
-        description="在控制台打印一句问候",
-        parameters=GreetArgs.model_json_schema(),
-        required_capabilities=["greet"],
-        resources=["speaker"],
-        preconditions=[],
-        verification="console_text_complete",
-    ),
+    name="greet",
     arguments=GreetArgs,
     handler=greet,
+    description="在控制台打印一句问候",
+    resources=("speaker",),
+    verification="console_text_complete",
 )
-
-
-def register_greet():
-    if "greet" in SKILLS and SKILLS["greet"] != GREET:
-        raise ValueError("greet_contract_already_registered")
-    SKILLS["greet"] = GREET

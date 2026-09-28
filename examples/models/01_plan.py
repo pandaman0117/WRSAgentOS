@@ -1,7 +1,6 @@
 """在线调用所配置的模型，根据 WRS 节点的真实状态和能力生成计划，不执行运动。"""
 
 import asyncio
-import time
 from pathlib import Path
 
 from wrs_agent.planner import ModelPlanner, PlanRequest

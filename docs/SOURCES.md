@@ -196,3 +196,72 @@ HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制�
 - `third_party/wrs/examples/test_lite6_workspace.py`
 
 借鉴显式参数、顺序调用、一个脚本展示一个场景的组织方式。没有复制算法或修改 WRS 源码；本项目示例仍经 Environment 适配器使用 WRS，不直接导入 WRS。示例不再解析命令行参数；故障断言与多场景报告在测试和验收脚本中维护。
+
+## S25 · 技能的领域归属与通用机制（2026-09-25）
+
+只读审阅以下本地固定提交的源码；工作区状态单独核对，不安装、不执行参考代码：
+
+- **RPent** `902ac6beef674559787d77ec130ed5e6834fc61b`，Apache-2.0：
+  [通用 Toolkit](https://github.com/RLinf/RPent/blob/902ac6beef674559787d77ec130ed5e6834fc61b/rpent/tools/toolkit.py)
+  保存 schema/handler 注册与执行机制；
+  [Franka Toolkit](https://github.com/RLinf/RPent/blob/902ac6beef674559787d77ec130ed5e6834fc61b/robots/franka/toolkit.py)
+  从同域 tools 的 TOOLS_SPEC 与 primitives 显式装配；RoboTwin 也在 robots/robotwin 内完成装配。
+- **DimOS** `29dfda595892dffb91c79f379eb44d1c737f9caf`，Apache-2.0：
+  [annotation.py](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/agents/annotation.py)
+  标记技能；core/module.py 的 get_skills 从所属模块读取签名/说明并生成 Schema。
+  [SpeakSkill](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/agents/skills/speak_skill.py)
+  把参数签名、说明与播报方法放在一起，接口另有同域 speak_skill_spec.py；
+  [PickAndPlaceModule](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/manipulation/pick_and_place_module.py)
+  在 manipulation 内定义抓放技能。另读 manipulation_skills.py，但该文件明确标注为 legacy/deprecated，
+  不将它当作推荐的新结构。
+- **HoloAgent** `ef14d3152ca6246d8ae64920694c6c74581d246c`，顶层 Apache-2.0：
+  [rel-move-skill](https://github.com/HorizonRobotics/HoloAgent/tree/ef14d3152ca6246d8ae64920694c6c74581d246c/agentic_robot/agentOS/holoagent_skills/skills/rel-move-skill)
+  在一个能力目录内放 SKILL.md、scripts/relative_move.py 和 assets；scripts/list_skills.py 只索引这些目录。
+  它的文档/脚本技能形式不同于本项目的受控 Action，不能据此推断两者执行和停止语义等价。
+
+本项目提取的组织原则：通用类型不含具体领域参数，能力目录拥有参数/说明/合同，系统目录
+只汇总显式选定的定义。机器人与语音的业务定义分开，共用验证和执行生命周期。
+继续用 Pydantic 生成 Schema、普通函数与明确的后端绑定；不复制其继承框架、反射发现、
+LangChain、MCP 或 HTTP/ROS 执行路径。没有复制或改编非平凡代码。
+
+## S26 · Node 生命周期与资源所有权（2026-09-25）
+
+沿用本地 DimOS 固定提交 29dfda595892dffb91c79f379eb44d1c737f9caf，Apache-2.0，
+只读核对，不安装或运行参考代码：
+
+- [core/module.py](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/core/module.py)：
+  ModuleBase 组合 Configurable 与 CompositeResource，Module 在其上提供模块能力；
+  start/stop 管理运行生命周期。其构造阶段会创建循环/RPC，本项目不沿用该副作用。
+- [core/resource.py](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/dimos/core/resource.py)：
+  CompositeResource 登记子资源，并在 stop 时集中释放。
+
+用户授权引入一层 Node 继承后，V1 用 Node 统一 setup/teardown、连接、执行器与后台任务清理。
+资源清理由标准库 AsyncExitStack 自行实现；构造只校验配置，初始化完成后才公布节点。
+WrsNode/TtsNode/AgentNode/VoiceNode/AsrNode 直接继承 Node，后端、Runtime、Planner 继续组合。
+各节点 options 独立校验，进程启动后并发等待各自初始化完成；这是本项目实现，
+不把 DimOS 的生命周期和物理停止语义视作等价。
+
+S23 的 NodeSpec/Blueprint 草案未落地，本轮取舍和当前 API 以 NODE_LAUNCH.md 为准。
+不引入多层 Resource/Module 继承、反射、自动连线、插件发现或 DimOS 运行依赖。
+没有复制或改编非平凡代码，未新增依赖或 submodule。
+
+## S27 · WRS 当前机械组件分层与节点归档（2026-09-25）
+
+只读核对当前固定 WRS2 提交 7815e6f110fd161fe3c3b7e6f978e5393c3cf502：
+
+- [MechBase](https://github.com/chenhaox/WRS2/blob/7815e6f110fd161fe3c3b7e6f978e5393c3cf502/wrs/robots/base/mech_base.py)
+  负责公共机械结构、运动学、安装关系和每实例运行状态。
+- [UR7E](https://github.com/chenhaox/WRS2/blob/7815e6f110fd161fe3c3b7e6f978e5393c3cf502/wrs/robots/manipulators/universal_robots/ur7e/ur7e.py)
+  在型号目录定义结构，继承 MechBase 与 SingleArmManipulation；
+  ur7e_with_gripper 显式创建机械臂和 DH50，再通过 mount 装配。
+- [SingleArmManipulation](https://github.com/chenhaox/WRS2/blob/7815e6f110fd161fe3c3b7e6f978e5393c3cf502/wrs/manipulation/arm.py)
+  把单臂行为集中为方法；末端执行器保持独立组件。
+- [末端执行器行为](https://github.com/chenhaox/WRS2/blob/7815e6f110fd161fe3c3b7e6f978e5393c3cf502/wrs/robots/end_effectors/ee_mixins.py)
+  与具体设备结构分开。
+
+借鉴“共用机制放基类、具体实现和配置就近归档、实例拥有状态、设备显式组合”。
+本项目据此统一 nodes/<role>/，将 ASR/Voice 闭包状态迁入 Node 子类，
+ASR 捕获与识别、TTS 合成与播放分别按职责归档。
+保留一层 Node 继承，不移植 WRS 的运动学/mixin 算法或增加 SpeechNode 等中间基类。
+未复制或改编非平凡代码，未修改 WRS 或引入新的运行依赖；实现由本项目既有代码重组。
+WRS 的当前本地 MechBase 层次优先于旧 Robot/Manipulator 路径假设。

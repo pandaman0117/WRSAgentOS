@@ -1,12 +1,13 @@
 import asyncio
 
+import httpx
 import pytest
 from conftest import eventually
+from llm_fixtures import REPLY
 from test_runtime import OfflineNode, motion
 
 from wrs_agent.bindings import load_bindings
 from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.policy import text_intent
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import (
@@ -69,33 +70,27 @@ async def test_interrupt_binds_task_once_and_does_not_retarget_new_task(make_env
         await env.close()
 
 
-async def test_interrupt_planning_without_task_rejects_late_result(make_env):
+async def test_interrupt_planning_without_task_rejects_late_result(make_env, make_llm):
     env = make_env()
-    model = MockClient(deferred=True)
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def respond(request):
+        entered.set()
+        await gate.wait()
+        return httpx.Response(200, content=REPLY.read_bytes())
+
+    model = make_llm(respond)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], ModelPlanner(model))
     try:
         await runtime.goal(GoalRequest(request_id="planning", goal="put A in B"))
-        await model.entered.wait()
+        await entered.wait()
         receipt = await runtime.interrupt(InterruptRequest(request_id="stop"))
         assert receipt["task_id"] is None and receipt["accepted"]
         assert runtime.goal_status("planning")["state"] == "STALE"
-        model.gate.set()
+        gate.set()
         # The model call is dropped, so no late reply can arrive to be checked at all.
-        await asyncio.gather(runtime.planning, return_exceptions=True)
-        assert runtime.planning.cancelled()
-        assert env.executions == 0 and runtime.task_id is None
-    finally:
-        await runtime.close()
-        await env.close()
-
-
-async def test_unfamiliar_mock_goal_does_not_invent_home_motion(make_env):
-    env = make_env()
-    runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], ModelPlanner(MockClient()))
-    try:
-        await runtime.goal(GoalRequest(request_id="ambiguous", goal="some unrecognized speech"))
-        await runtime.planning
-        assert runtime.goal_status("ambiguous")["state"] == "CLARIFY"
+        await asyncio.gather(runtime.planning.worker, return_exceptions=True)
+        assert runtime.planning.worker.cancelled()
         assert env.executions == 0 and runtime.task_id is None
     finally:
         await runtime.close()

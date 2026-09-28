@@ -1,49 +1,24 @@
-"""Qwen synthesis and local playback behind the existing speak action contract."""
+"""Speech execution: output state, local playback, and real/offline action backends."""
 
 import asyncio
 import threading
+from dataclasses import dataclass, replace
 
-from wrs_agent.actions import ActionExecutor, ExecutionUnknown, SkillFailure
-from wrs_agent.skills import SKILLS, Skill, SpeakArgs, SpeechState
-from wrs_agent.speech.assets import model_directory, offline_cuda
-
-# Eight decode steps are two thirds of a second of audio, so a stop request lands within
-# roughly a third of a second of wall time. Smaller chunks only add codec decode overhead.
-STOP_CHECK_STEPS = 8
+from wrs_agent.executor import ActionExecutor, ExecutionUnknown, SkillFailure
+from wrs_agent.schemas import SpeechData
+from wrs_agent.skills.speech import SKILLS, SpeakArgs
 
 
-class QwenTTS:
-    def __init__(self, *, speaker="Vivian"):
-        directory = model_directory("tts")
-        torch = offline_cuda()
-        from faster_qwen3_tts import FasterQwen3TTS
+@dataclass
+class SpeechState:
+    """Snapshot data shared by real and offline speech execution."""
 
-        self.model = FasterQwen3TTS.from_pretrained(
-            str(directory), device="cuda", dtype=torch.bfloat16,
-            attn_implementation="sdpa", local_files_only=True,
-        )
-        # Capturing the CUDA graphs belongs to load time, never to the first action.
-        self.model.warmup()
-        self.speaker = speaker
+    version: int = 0
+    completed: int = 0
+    last_text: str = ""
 
-    def render(self, text, stopped):
-        # Replaying a CUDA graph never calls Python forward hooks, so synthesis can only be
-        # interrupted between streamed chunks. Abandoning the generator is safe; the model
-        # still serves later requests. Playback joins the chunks.
-        chunks, rate = [], None
-        stream = self.model.generate_custom_voice_streaming(
-            text=text, speaker=self.speaker, language="Chinese",
-            max_new_tokens=2048, chunk_size=STOP_CHECK_STEPS,
-        )
-        try:
-            for audio, sample_rate, _ in stream:
-                if stopped.is_set():
-                    return None
-                chunks.append(audio)
-                rate = sample_rate
-        finally:
-            stream.close()
-        return None if stopped.is_set() or not chunks else (chunks, rate)
+    def snapshot(self):
+        return SpeechData(completed=self.completed, last_text=self.last_text)
 
 
 def play_audio(chunks, rate, stopped):
@@ -68,7 +43,7 @@ def play_audio(chunks, rate, stopped):
             if stopped.is_set():
                 stream.abort()
                 return False
-            if stream.write(audio[offset:offset + block]):
+            if stream.write(audio[offset : offset + block]):
                 raise RuntimeError("audio_output_underflow")
         if stopped.is_set():
             stream.abort()
@@ -91,7 +66,11 @@ def play_audio(chunks, rate, stopped):
 
 
 class SpeechBackend:
-    """Single ActionExecutor owns this backend. No background playback or request queue."""
+    """Compose blocking render(text, stopped) and play(chunks, rate, stopped) functions.
+
+    One ActionExecutor owns this backend. Synthesis and playback run in worker
+    threads; cancellation waits for the active worker to confirm it has stopped.
+    """
 
     def __init__(self, render, play=play_audio):
         self.render, self.play = render, play
@@ -154,26 +133,50 @@ class SpeechBackend:
         return False
 
 
-async def make_qwen_tts(journal, *, prepared_texts=()):
-    # Loading/preparation happen before node readiness, never per action or on the control loop.
-    renderer = await asyncio.to_thread(QwenTTS)
-    backend = SpeechBackend(renderer.render)
-    await asyncio.to_thread(backend.prepare, prepared_texts)
-    return make_speech_executor(journal, backend)
-
-
 def make_speech_executor(journal, backend):
+    """Bind synthesis/playback to the shared speak action and its stop contract."""
     contract = SKILLS["speak"]
-    skill = Skill(
-        contract.spec.model_copy(update={"verification": "local_audio_output_drained"}),
-        contract.arguments, backend.speak,
+    skill = replace(
+        contract, verification="local_audio_output_drained", handler=backend.speak,
     )
     return ActionExecutor(
-        journal, state=SpeechState(), skills={"speak": skill}, backend="qwen_tts",
-        duration=0,
-        capabilities_extra={
-            "robot_controls": False, "controller_flush": False, "controlled_stop": True,
+        journal,
+        state=SpeechState(),
+        skills=[skill],
+        backend="qwen_tts",
+        features_extra={
+            "robot_controls": False,
+            "controller_flush": False,
+            "controlled_stop": True,
             "verification": "local_audio_output_drained",
             "stop_scope": "local_audio_stream_abort",
+        },
+    )
+
+
+def make_mock_tts(journal_path, *, duration=0.4):
+    """Simulate speech completion for offline runs; never open an audio device."""
+    async def speak(state, args, stop, progress):
+        if duration > 0:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=duration)
+            except TimeoutError:
+                pass
+        if stop.is_set():
+            return False
+        # Virtual completion only; no claim that a device produced audible output.
+        state.last_text = args.text
+        state.completed += 1
+        return state.last_text == args.text
+
+    return ActionExecutor(
+        journal_path,
+        state=SpeechState(),
+        skills=[SKILLS["speak"].bind(speak)],
+        backend="mock_tts",
+        features_extra={
+            "robot_controls": False,
+            "controller_flush": False,
+            "controlled_stop": False,
         },
     )

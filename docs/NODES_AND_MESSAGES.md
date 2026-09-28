@@ -1,16 +1,16 @@
 # 节点与消息：V1 如何借鉴 DimOS
 
-V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Module/Stream/Topic 类体系。借鉴组件拥有自己的生命周期、消息合同与输入输出边界；目前没有必要搬入 DimOS 的自动连接、多传输及编码 mixin。Blueprint 只取「配置是跟着组件走的普通值」这一点，设计与取舍见 [节点启动](NODE_LAUNCH.md)。
+V1 使用 Node、Skill、Task；WRS、TTS、Agent、Voice、ASR 直接继承同一层薄 Node，统一生命周期。借鉴组件拥有自己的生命周期、消息合同与输入输出边界；目前没有必要搬入 DimOS 的自动连接、多传输及编码 mixin。Blueprint 只取「配置是跟着组件走的普通值」这一点，设计与取舍见 [节点启动](NODE_LAUNCH.md)。
 
 ## 四个词对应什么
 
 | DimOS 概念 | 本项目的理解 | V1 选择 |
 |---|---|---|
-| Module | 一个有明确职责、可运行的组件 | 继续叫 Node；WRS、TTS、Voice、Agent 已有独立进程。无需共同继承 Module |
+| Module | 一个有明确职责、可运行的组件 | 继续叫 Node；五类内置节点直接继承它，业务对象保持组合，不再增加 Module 层 |
 | Stream | 组件持续输出的数据，如图像、识别片段、进度 | 是 Event/Stream 的通信场景。暂不增加可组合 Stream 类、操作符或响应式依赖 |
 | Topic | 发布订阅使用的地址 | 使用 Zenoh key 字符串和既有前缀/后缀。规范命名即可，不需要 Topic 对象 |
 | Message | 一次传输的数据 | 使用现有 Pydantic 消息合同。长期动作仍需要编号、受理、进度、终态和取消语义 |
-| Blueprint | 怎样配置并启动一组组件 | 借鉴蓝图是冻结的普通值、后写覆盖；不引入 autoconnect、entry-point 发现、命名空间机群和协调器。见 [节点启动](NODE_LAUNCH.md) |
+| Blueprint | 怎样配置并启动一组组件 | 本轮使用各节点的 options 和普通 Python 数据复用配置；暂不实现 Blueprint/NodeSpec 或自动连线。见 [节点启动](NODE_LAUNCH.md) |
 
 这些词描述不同层面，并不是四个必须实例化的业务对象。给一条消息选地址、把消息持续发布出去，并不要求使用者先构造四层类。以上定义来自 DimOS 的 [传输说明](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/transports/index.md)。
 
@@ -23,9 +23,22 @@ V1 保持现有 Node、Skill、Task，不再要求开发者学习另一套 Modul
 - Voice 已是独立节点，接收已识别文本并分类。可选的 ASR 节点持有麦克风与本地识别模型，按键控制起止，只把文字回给按住的调用者，停止则直接进 Voice 控制通道。两者的合同见 [文本合同](VOICE_INPUT.md)。
 - Agent 也是独立节点，包含 Runtime 和 Planner。Planner 先作为可替换的内部接口；只有独立 GPU、故障隔离或部署需求出现时再拆进程。
 
-可运行入口是 [自定义节点与 Skill](../examples/README.md#nodes)。新增后端主要修改处理函数和节点创建信息；新增受支持角色的实例主要修改配置与启动入口，Runtime 不增加对应分支。V1 不自动加载网络发现的代码。
+可运行入口是 [自定义节点与 Skill](../examples/README.md#nodes)。新增后端主要修改处理函数和 Node.setup；自定义节点使用独立 node_id 启动并公布合同，Runtime 从目录发现它，不增加对应分支，也不要求它预先写入 Agent 的部署清单。V1 不自动加载网络发现的代码。
 
-DimOS 的 [Module 文档](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/modules.md) 展示了输入、输出、RPC 和生命周期声明。借鉴这些边界即可；本项目目前不需要同样的继承与自动装配方式。
+DimOS 的 [Module 文档](https://github.com/dimensionalOS/dimos/blob/29dfda595892dffb91c79f379eb44d1c737f9caf/docs/usage/modules.md) 展示了输入、输出、RPC 和生命周期声明。本项目借鉴生命周期和资源所有权，以一层 Node 继承实现；不复制多层基类、反射 RPC 或自动装配。
+
+## 部署、发现与任务调度
+
+部署文件供 launch 启动进程使用。Agent、工作节点和客户端可以分别启动，并通过共同的
+Router endpoint、site/env_id 和会话凭据加入同一个通信域。
+每个节点公布自己的服务地址、启动实例、技能和动作能力；NodeRegistry 维护运行时目录。
+Registry 存在于使用者内部，不负责启动进程，也不让所有业务消息绕经 Agent。
+
+Agent 内的 Runtime 从目录选择动作提供者，并固定本次任务所用的实例。
+离线记录不意味着动作完成，重启也不会恢复旧任务；多个同名技能需要明确选择。
+同一 node_id 的多个实例或不同动作节点共用地址时，目录拒绝执行。
+本机 launch 继续提供便捷的一组内置节点，未列入该清单的独立节点也能在运行时加入。
+具体 API 与可运行例子见 [启动清单与运行时发现](NODE_LAUNCH.md#启动清单与运行时发现)。
 
 ## zenohpubsub 值得借鉴什么
 

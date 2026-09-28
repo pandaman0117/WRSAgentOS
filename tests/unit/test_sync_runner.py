@@ -2,7 +2,9 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from llm_fixtures import chat_reply
 
 from wrs_agent import launch
 from wrs_agent.sync import Session
@@ -15,7 +17,7 @@ async def test_sync_entry_rejects_existing_event_loop_before_starting():
 
 
 def test_sync_startup_failure_closes_runner():
-    with pytest.raises(ValueError, match="unsupported_backend"):
+    with pytest.raises(ValueError, match="backend"):
         with launch(backend="unsupported"):
             pytest.fail("invalid backend must not start")
 
@@ -70,26 +72,36 @@ def test_local_runtime_progress_requires_its_runner_to_be_driven():
     import time
 
     from wrs_agent.planner import ModelPlanner
-    from wrs_agent.planner.providers.mock import MockClient
+    from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
     from wrs_agent.runtime import Runtime
     from wrs_agent.schemas import GoalRequest
 
     with asyncio.Runner() as runner:
-        model = MockClient('{"kind":"answer","text":"done"}', deferred=True)
+        entered, gate = asyncio.Event(), asyncio.Event()
+
+        async def respond(request):
+            entered.set()
+            await gate.wait()
+            return httpx.Response(200, json=chat_reply('{"kind":"answer","text":"done"}'))
+
+        model = LLMClient(
+            LLMConfig(model="fixture", base_url="https://model.invalid/v1"),
+            transport=httpx.MockTransport(respond),
+        )
         runtime = Runtime({}, {}, ModelPlanner(model))
         try:
             runner.run(runtime.goal(GoalRequest(request_id="local", goal="status")))
-            runner.run(model.entered.wait())
-            model.gate.set()
+            runner.run(entered.wait())
+            gate.set()
             # This Runtime lives in this process, unlike launch()'s Agent process.
             time.sleep(0.03)
-            assert runtime.planning_state == "WAITING"
+            assert runtime.planning.state == "WAITING"
 
             async def finish():
-                await runtime.planning
+                await runtime.planning.worker
 
             runner.run(finish())
-            assert runtime.planning_state == "ANSWER"
+            assert runtime.planning.state == "ANSWER"
         finally:
             runner.run(runtime.close())
             runner.run(model.aclose())
@@ -97,7 +109,7 @@ def test_local_runtime_progress_requires_its_runner_to_be_driven():
 
 @pytest.mark.parametrize("state", ["FAILED", "CANCELLED", "UNKNOWN"])
 async def test_action_wait_returns_unsuccessful_terminal_status(state):
-    from wrs_agent.nodes.actions import ActionHandle
+    from wrs_agent.nodes.action_rpc import ActionHandle
     from wrs_agent.schemas import ActionStatus
 
     result = ActionStatus(action_id="a", state=state, reason="reported by node")
@@ -111,7 +123,7 @@ async def test_action_wait_returns_unsuccessful_terminal_status(state):
 
 
 async def test_action_wait_missing_status_raises_unknown():
-    from wrs_agent.nodes.actions import ActionHandle
+    from wrs_agent.nodes.action_rpc import ActionHandle
 
     async def status(action_id):
         return None

@@ -29,7 +29,7 @@ async def request_for(node, *, pose="B", revision=0, skill="move_named_pose"):
 async def test_real_wrs_progress_query_completion_and_unsupported():
     async with LocalStack(backend="wrs", duration=0.5) as stack:
         node = stack.system.clients["wrs"]
-        cap = await node.capabilities()
+        cap = await node.features()
         assert cap.backend == "wrs" and cap.verification == "wrs_fk"
         assert not cap.hardware and not cap.controller_flush
         assert "pick" in cap.unsupported and "pick" not in cap.skills
@@ -119,7 +119,7 @@ async def test_runtime_schedules_real_wrs_node():
             lambda s: s["state"] in {"SUCCEEDED", "FAILED", "UNKNOWN"},
         )
         assert done["state"] == "SUCCEEDED"
-        assert (await stack.system.clients["wrs"].capabilities()).backend == "wrs"
+        assert (await stack.system.clients["wrs"].features()).backend == "wrs"
 
 
 async def test_unsupported_wrs_step_prevents_partial_tts_side_effect():

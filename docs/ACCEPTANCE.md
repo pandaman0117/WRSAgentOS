@@ -46,7 +46,7 @@ E：人工监督的实际机器人测试，必须另行 opt-in；不作为无人
 | T22 | A/B | 验证 INCONCLUSIVE | 不解锁依赖持物成功的下一步 |
 | T23 | A | Provider 输出截断/拒绝/非法 JSON | 不提交任何物理动作 |
 | T24 | A | 流式参数只到一半 | 不执行；完整后仍做 Schema 校验 |
-| T25 | A | 更换第二个 ModelClient 测试实现 | 不修改 Runtime、Skill、Environment |
+| T25 | A/B | LLMClient 切换三种线协议 | 同一 ModelPlanner/Runtime/Skill/Environment，均通过真实客户端解析 |
 | T26 | A | Provider 不支持指定参数 | 启动/请求构建时明确失败，不静默伪装支持 |
 | T27 | A/B | GLM 请求永不返回 | 本地停止路径仍然工作 |
 | T28 | A/B | 相同适用任务再次执行 | 模型调用减少，动作 ID 与授权重新生成 |
@@ -721,3 +721,601 @@ verify：unit PASS（628 passed，0 failed/errors/skipped）、zenoh PASS（73 p
 Runtime 改动：`interrupt()` 遇到 WAITING 规划时取消该规划协程。WAITING 表示这次调用尚未启动任务，只丢弃模型请求（其回复本来也会被判过期）；此前协程要等模型返回，期间 `goal()` 一直报 `planner_unavailable_or_busy`。新增集成测试 `test_stop_drops_pending_model_call_so_the_next_goal_is_accepted_at_once`，去掉该改动时以 `planner_unavailable_or_busy` 失败；`test_interrupt_planning_without_task_rejects_late_result` 改为断言规划协程已取消。
 
 验证：单元测试 640 passed；`./scripts/run.ps1 -m pytest tests/integration/test_system.py test_task_identity.py test_voice_text.py test_qwen_voice_wrs.py` 22 passed；Ruff 通过。09 仅 `py_compile`，未在运行中的 07 上手动复测（UNVERIFIED）。
+
+
+## 2026-09-25：Mock 示例清理
+
+保留机器人、TTS、ASR 和模型四类替身，用于离线调度、取消、资源隔离、故障和迟到响应回归。
+本轮不修改运行时后端、默认启动值或通信 API；WRS 虚拟 IK/FK 仍保留。
+
+删除重复示例 `examples/beginner/03_cancel_action.py`、`examples/tasks/05_goal.py`、
+`examples/voice/04_text_goal.py`。原 `examples/connect` 两份脚本移到 `tests/fixtures/connect/`，
+仍验证独立进程连接、共享口令与客户端退出后服务存活；原 `examples/models/fixtures` 的三份
+协议响应和说明移到 `tests/fixtures/models/`，内容逐份与 HEAD 核对一致。
+保留并注明 Mock 播报的 tasks/02、voice/02，更新示例目录、测试引用和当前文档。
+用户原有 sync.py/system.py 修改以 SHA-256 核对未变。
+
+实际运行命令（仓库根目录）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/mock_cleanup_lint.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/mock_cleanup_review.py
+git diff --check
+```
+
+结果：单元 639 passed；Zenoh 74 passed / 13 deselected；WRS 13 passed / 74 deselected。
+两次集成分组互补，合计 726 passed、0 failed/errors/skipped；deselected 不是跳过或通过。
+19 个有限 WRS 示例全部符合预期输出，doctor/WRS 模型探针通过；示例目录校验通过，
+本次更新文档的 124 个本地链接有效，git diff --check 通过。
+
+完整 verify 退出码为 1：全仓库 Ruff 存在三条原有告警（不是全绿）。
+`examples/models/01_plan.py:4` 未使用 time（F401）；`wrs_agent/env/ur_rtde.py:214`
+超长行（E501）；`wrs_agent/nodes/actions.py:82` async 函数 timeout 参数（ASYNC109）。
+这三份文件均与 HEAD 一致，并用 `git show HEAD:<path>` 的原始内容逐个经
+`ruff check --stdin-filename <path> -` 复现。当前变更及新增的 15 份 Python 文件静态检查通过；
+为遵循最小修改原则，本轮不混入这些既有告警的修复。
+
+环境：Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8、httpx 0.28.1；WRS 固定提交
+`7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块工作区干净。
+未启动真实音频设备、付费模型或物理硬件；这些能力仍为 UNVERIFIED。
+证据：`reports/mock_cleanup_summary.json`、`mock_cleanup_lint.json`、`mock_cleanup_review.json`，
+以及 `unit.xml`、`zenoh.xml`、`wrs.xml`、`acceptance.json` 和对应输出。
+下一阶段入口仍为启动配置设计；本轮未实现 Blueprint 或流式模型执行。
+
+## 2026-09-25：wrs_agent 职责整理
+
+内置技能合同迁入 `skills/contracts.py`，唯一注册表与检索/校验在 `skills/catalog.py`；
+`skills/__init__.py` 只导出公共名称。内置条目不绑定后端 handler，执行节点显式绑定；
+未绑定条目在打开日志前被拒绝。参数模型、合同描述、版本与缓存指纹输入经 AST 对照保持一致。
+
+机器人 Mock 状态、动作、模拟延迟和故障在 `env/mock.py`；Mock TTS 与脚本式捕获统一在
+`speech/mock.py`，播报状态在 `speech/state.py`。共用执行器 `actions.py` 改名
+`executor.py`，不再承担模拟延迟/故障；`nodes/actions.py` 改名 `nodes/action_rpc.py`，
+`nodes/tts.py` 移除。新增 `plan_validation.py` 与 `runtime_state.py`；Runtime 仍拥有
+全部调度/取消控制流程，执行和规划状态归拢为普通数据对象。源码职责与内部导入迁移见
+[开发交接](DEVELOPMENT.md#源码职责与阅读入口)。
+
+保留工作区原有示例清理及用户代码：sync.py 与基线逐字节相同，system.py 仅更换动作
+客户端导入路径。未修改消息 schemas.py、依赖清单、锁文件或 WRS gitlink。
+修复三条原有 Ruff 告警：未用 time 导入、UR 驱动超长表达式和 RPC timeout 局部抑制；
+没有更改硬件驱动行为。内部 ActionExecutor 的 duration/fault 参数已移除，后端负责模拟。
+
+实际命令（仓库根目录，固定 Python 3.12.0）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit --junitxml=reports/structure_unit.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/structure_review.py
+git -c core.safecrlf=false diff --check
+```
+
+最终分项结果：单元 **641 passed**；Zenoh **74 passed / 13 deselected**；
+WRS 虚拟环境 **13 passed / 74 deselected**；合计 **728 passed、0 failed/errors/skipped**。
+deselected 是互补测试分组，不计为跳过。19 个有限示例全部符合预期；
+Ruff、doctor/WRS 探针及结构审查通过。
+
+首轮定向检查 138 passed / 2 failed：停止故障用例只等 RUNNING，而 handler 尚未进入；
+改为等待 Mock started，保留 UNKNOWN 和拒绝后续任务的断言，并新增“日志等待中取消，
+handler 不执行且可确认停止”的回归。4 项停止专项随后通过。
+完整 verify 首轮为 640 passed / 1 failed（版本漂移夹具丢失 handler），因此该命令退出 1；
+修正夹具后全部单元重跑得到上述 641 passed。其余集成、WRS、示例沿用同轮真实通过结果，
+未修改它们已验收的实现，也未把原失败报告覆盖成成功。新增另一项回归验证未绑定合同拒绝。
+
+最终汇总为 `reports/structure_verification.json`；原完整检查为
+`reports/structure_verify_initial.json`；初始失败输出在 `structure_focused_initial.txt/xml`
+和 `structure_unit_initial.txt/xml`，修复后单元在 `structure_unit.txt/xml`。
+结构审查脚本与结果为 `structure_review.py/json`，修改前快照为 `structure_before/`。
+
+依赖：eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8、httpx 0.28.1。
+WRS 提交 `7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块工作区干净。
+付费模型、真实麦克风/播放、物理硬件、双机和性能基准均未验证；本轮没有相应调用，
+没有阻塞的软件验收项。未 commit/push。下一阶段入口仍为 [节点启动配置](NODE_LAUNCH.md)。
+
+## 2026-09-25：技能按能力归属
+
+机器人参数与七项合同归 `skills/robot/definitions.py`，播报参数与合同归
+`skills/speech/definitions.py`；各自引用相邻 SKILL.md。`contracts.py` 只含
+SkillSpec/Skill，`catalog.py` 显式汇总、检索、校验。后端直接导入本域合同并绑定
+handler，具体参数不再从 skills 根包导出。参考固定 RPent、DimOS、HoloAgent 源码，
+证据和取舍见 SOURCES 的 S25；维护方法见技能 README 和 DEVELOPMENT。
+
+8 项合同的完整序列化数据及 Schema 与本轮基线完全一致；参数类、共用类型、
+检索/校验逻辑经 AST 对比一致，后端仅改导入。版本漂移夹具
+`tests/fixtures/versioned_tts.py` 改为修改语音所属合同，使重启节点确实声明版本 2；
+原“版本漂移后拒绝计划并保留可查询错误”的断言不变。
+
+**本轮验证范围是稳定副本。** 工作期间另一个 Node 生命周期改动修改了入口与导入链，
+一度引用尚未存在的 instance_lock.py。主工作区首轮单元 641 passed；
+集成 17 passed / 70 failed（包含上述版本夹具问题），原始报告保留，
+不将这份混合版本结果记作通过，也不覆盖并行修改。
+
+以 `reports/skill_boundary_before` 为基线，在 `reports/skill_boundary_validation`
+叠加本轮技能和夹具改动；快照清单在 `skill_boundary_isolation.json`。
+依赖与 WRS 使用同一本地固定版本，未复制凭据、未安装参考框架。
+稳定副本中的真实命令如下（固定解释器，工作目录为该副本）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit tests/integration -m 'not live_model and not audio_live and not hardware' --junitxml=reports/skill_boundary_isolated_tests.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/integration/test_developer_examples.py::test_custom_node_and_skill_run_from_another_working_directory tests/integration/test_error_protocol.py::test_incompatible_restarted_node_blocks_plan_and_retains_error_for_reconnect tests/integration/test_wrs.py::test_real_wrs_progress_query_completion_and_unsupported --junitxml=reports/skill_boundary_recheck.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -m build --wheel --no-isolation --outdir reports/wheel
+```
+
+稳定副本首轮为 725 passed / 3 failed：隔离副本漏拷 router.json5、版本夹具引用旧目录，
+以及把单元/集成放在一个 pytest 进程，导致单元测试导入的 WRS 影响集成模块隔离断言。
+补齐副本资源、更新夹具后，在新 pytest 进程定向重跑这三项，结果 **3 passed**。
+未修改测试断言。合并去重后的分项结果为 **641 单元 + 87 集成 = 728 passed，
+0 failed/errors/skipped**；这是初轮与定向复测的汇总，不是首轮命令全绿。
+
+技能目录 `examples/beginner/02_skills.py` 与 WRS/播报并行
+`examples/tasks/02_parallel.py` 两个示例的预期输出均通过；
+`reports/skill_boundary_examples.py` 记录实际命令、工作目录与输出。
+Ruff 通过；wheel 成功构建，直接从 wheel 导入的两份说明和全部合同与源码一致。
+30 项合同/结构/导入/链接审查通过，包含副本技能代码与主工作区逐字节相同。
+根目录复现审计：固定 Python 以 `-X utf8 -S
+reports/skill_boundary_validation/scripts/run.py reports/skill_boundary_review.py` 运行。
+
+汇总 `reports/skill_boundary_verification.json`；原始报告分别为
+`skill_boundary_unit.*`、`skill_boundary_integration.*`、
+`skill_boundary_isolated_tests.*` 和 `skill_boundary_recheck.*`。
+打包与依赖证据在 `skill_boundary_package.json`、`skill_boundary_environment.json`。
+Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8、httpx 0.28.1；
+WRS `7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块干净。
+
+未运行付费模型、真实音频或物理硬件；没有这些项目的通过声明。
+并行 Node 生命周期修改后的整仓验收仍由该改动完成，本记录不代表其已通过。
+下一步是合并当前 Node 工作区后的整体验证；本轮技能调整不再有待实现项。未 commit/push。
+
+## 2026-09-25：统一 Node 生命周期
+
+在当前共享工作区引入一层 Node：五类内置节点直接继承，后端/Runtime/Planner 通过组合使用。
+Node 统一 setup/teardown、连接复用、动作注册、后台任务与逆序清理；构造只校验配置。
+各节点独立 options，经相同合同在进程两侧校验；LocalStack 同时启动已启用节点并分别等待初始化。
+ready 继续表达动作准入，HELD 不会因启动成功被自动恢复。
+自定义 speaker 使用 custom；两个 custom 节点可在同一后缀下独立查询、发现和退出。
+
+高层 launch/connect/step 和 CLI 常用参数保留。Python serve_node 的后端参数改放 options，
+action_factory 改为 Node.setup 内调用 self.actions；节点退出路径统一为
+`request/node/<node_id>/shutdown`。动作、任务、停止、epoch 和 UNKNOWN 语义不变。
+实现入口与迁移例子见 [Node 指南](NODE_LAUNCH.md)。
+
+真实命令（仓库根目录，固定解释器）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit --junitxml=reports/node_unit_final.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/integration -m wrs --junitxml=reports/node_wrs_final.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/node_review.py
+git -c core.safecrlf=false diff --check
+```
+
+最终分项结果为 **652 单元 + 75 Zenoh + 13 WRS = 740 passed，0 failed/errors/skipped**；
+分组中的 deselected 是互补选择，不计为跳过。19 个有限示例全部符合预期；
+Ruff、doctor/WRS 虚拟探针和补丁格式检查通过。新增回归覆盖构造无副作用、初始化失败、
+取消、清理异常、后台任务失败、启动并发/失败清理、HELD、custom 身份与独立退出。
+27 项结构与文档审查通过，核实 Runtime/执行器/动作 RPC/Transport/同步包装业务 AST
+相对本轮基线未变，实例锁仅迁移，消息 Schema 只增加 custom。
+
+**首轮 verify 命令退出 1，以上是复测后的汇总。** 首轮单元为 651 passed / 1 failed：
+同步入口仍匹配旧 unsupported_backend 文案，改为检查配置字段 backend 的校验错误。
+首轮 WRS 为 12 passed / 1 failed：旧测试等 Agent ready 就查询 WRS；
+改为分别确认 Agent 与 WRS 初始化，允许重启 WRS 保持 HELD，并继续验证显式恢复。
+随后完整重跑单元、WRS 分组和 Ruff，得到上述结果；Zenoh、doctor 和示例沿用同轮通过证据。
+未修改业务实现来隐藏失败，未把首轮报告改成通过。
+
+汇总为 `reports/node_verification.json`。首轮输出保留在
+`node_initial_acceptance.json`、`node_initial_unit.txt/xml`、
+`node_initial_wrs_runtime.txt` 和 `node_initial_wrs.xml`；
+最终单元/WRS 报告为 `node_unit_final.txt/xml`、`node_wrs_final.txt/xml`。
+首轮通过的 Zenoh、doctor、示例分别为 `zenoh.txt/xml`、`doctor.json` 和 `example_*.txt`。
+审查脚本和报告为 `node_review.py/json`；本轮开始快照为 `node_before/`。
+该验收直接针对共享工作区，包含并行完成的技能领域整理，不使用隔离副本代替最终验证。
+
+环境：Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、
+pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS `7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块工作区干净。
+没有新增依赖或修改 lockfile。付费模型、真实麦克风/播放、物理硬件、双机和性能
+仍为 UNVERIFIED；本轮没有相应调用，没有阻塞的软件验收项。未 commit/push。
+后续入口是 Node 指南与 speaker 示例；模型流式执行不在本次 Node 重构范围。
+
+## 2026-09-25：功能命名统一为 features
+
+按用户选择，把 Node 的 capabilities 统一改为 features，同时迁移 NodeInfo.features、
+SkillSpec.required_features、features()、FeatureSnapshot、features_extra 与 request/features。
+节点、目录、Runtime、技能校验、缓存、后端、示例和测试使用同一名称。
+功能标签、技能版本和动作参数不变；执行准入、控制、取消与 UNKNOWN 判断不变。
+Python 旧名、节点目录/技能 spec 旧字段及旧查询路径不兼容，客户端与节点同批更新；
+高层 launch/connect/step 保留。对照表见 [Node 指南](NODE_LAUNCH.md#功能名称迁移)。
+
+真实命令：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/features_review.py
+git -c core.safecrlf=false diff --check
+```
+
+完整 verify 本轮退出 **0**，**652 单元 + 75 Zenoh + 13 WRS = 740 passed，
+0 failed/errors/skipped**；19 个有限示例通过，Ruff 与 doctor/WRS 虚拟探针通过。
+deselected 为互补测试分组，不是跳过。没有新增仅验证命名的测试，沿用已有实际行为回归。
+44 项审查通过：41 个 Python 文件的 AST 只含约定的名称替换与导入排序变化，
+运行代码/测试/示例无旧名残留，相关文档链接及补丁格式有效。
+最初静态检查发现三处类型改名引起的导入排序问题，自动修正后完整验收通过。
+
+汇总 `reports/features_verification.json`；本轮原始测试、示例、环境和完整验收报告
+独立保存在 `reports/features_evidence/`。审查为 `features_review.py/json`，
+修改前文件为 `features_before/`，之前验收输出留在 `features_previous/`。
+外部来源 URL 和历史验收名称保留原文；当前迁移文档明确列出旧名与新名。
+
+Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、
+pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS `7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块工作区干净。
+没有新增依赖；付费模型、真实音频、物理硬件、双机与性能仍未验证，本轮没有相关调用。
+没有阻塞的软件验收项，未 commit/push。开发入口为 Node 指南中的 features/skills/options。
+
+## 2026-09-25：节点按职责归档，ASR/Voice 状态归属子类
+
+五类内置节点统一为 `nodes/<role>/node.py`；具体配置归各包 options.py，
+公共 options.py 只保留 Texts/Duration。launch_options 在具体 Node 声明，
+builtin.node_options 统一转换现有高层参数，CLI/launch/options JSON 保持不变。
+ASR 的采集、识别、Mock 分开；TTS 的动作后端、合成、播放、Mock、状态分开。
+模型清单分别随节点打包，共用 nodes/model_assets.py 的校验与离线规则。
+旧顶层 speech 包及 register_asr/register_voice 已移除，导入迁移见 [Node 指南](NODE_LAUNCH.md)。
+
+AsrNode 自己持有按键会话、锁、结果及请求方法，teardown 等采集线程收尾；
+VoiceNode 持有自己的去重记录和任务。Node 基类的生命周期足以支持这些行为。
+Agent 的状态仍在 Runtime，纯消息适配放 agent/rpc.py；公共 Action 协议继续复用。
+本轮只整理归属和方法绑定，不改变功能标签、消息字段/路径、授权、幂等、取消与 UNKNOWN。
+WRS 参考文件与取舍见 SOURCES S27，未修改或复制 WRS 非平凡代码。
+
+真实命令（仓库根目录）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_asr_node.py tests/unit/test_speech.py tests/unit/test_node_lifecycle.py tests/unit/test_processes.py tests/unit/test_revision_regressions.py --junitxml=reports/nodes_layout_focused.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_asr_node.py tests/unit/test_node_lifecycle.py --junitxml=reports/nodes_layout_lifecycle.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/nodes_layout_review.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -m build --wheel --no-isolation --outdir reports/nodes_layout_wheel
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/nodes_layout_package.py
+git -c core.safecrlf=false diff --check
+```
+
+定向检查先得到 **144 passed**；新增 ASR 在关闭/取消时等待真实工作线程退出、
+以及多个实例不共享按键/文本的 3 项回归后，生命周期专项 **22 passed**。
+完整 verify 本轮退出 **0**，**655 单元 + 75 Zenoh + 13 WRS = 743 passed，
+0 failed/errors/skipped**；19 个有限示例通过，Ruff、doctor/WRS 虚拟探针通过。
+deselected 是互补分组，不计为跳过。初始导入排序和行宽问题在完整验收前修正。
+
+59 项审查通过：13 项后端/适配声明与 4 个配置模型的 AST 不变，
+ASR/Voice 原闭包函数与新方法对比只有 self 绑定及 nonlocal 去除；
+协议、Runtime、执行器、Transport、Environment 和技能合同逐字节不变。
+模型文件清单、默认模型目录与语音解释器目录保持原样，无旧运行入口残留，文档链接有效。
+
+wheel 构建成功，直接从 wheel 导入节点与 Qwen 类型通过；
+两份清单与原 ASR 9 项/TTS 12 项文件元数据逐项一致，wheel 不包含旧 speech 包，
+两份 Skill 说明齐全。导入未加载 Torch、sounddevice 或 Qwen SDK。
+现有构建环境报告 setuptools/wheel 兼容性警告但退出 0，没有安装或升级构建依赖；
+该验证覆盖包源码与资源，不代表完整安装部署或真实模型已经验证。
+
+汇总 `reports/nodes_layout_verification.json`，本轮完整原始报告在
+`reports/nodes_layout_evidence/`；结构审查 `nodes_layout_review.py/json`，
+包资源审查 `nodes_layout_package.py/json`，修改前文件 `nodes_layout_before/`。
+构建 wheel 在 `nodes_layout_wheel/`，中间构建产物已归档 `nodes_layout_build/`，
+没有将构建目录留在源码根目录。
+
+Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、
+pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS `7815e6f110fd161fe3c3b7e6f978e5393c3cf502`，子模块干净。
+pyproject 仅更改资源打包路径，uv.lock 和运行依赖不变。
+未下载/加载真实模型，未录音/播放，未调用付费模型或物理硬件；
+这些以及双机/性能仍为 UNVERIFIED。没有阻塞的软件验收项，未 commit/push。
+后续从 Node 指南及各节点 node.py/options.py 进入；替换后端保留既有会话和控制语义。
+
+## 2026-09-25：节点配置同文件与单元测试去重
+
+ASR、TTS、Agent、WRS 的 Options 类已移到各自 node.py 的 Node 类前；
+四个局部 options.py 删除，共用 nodes/options.py 只保留 Texts/Duration 约束。
+字段、默认值、校验、启动映射和业务行为保持不变。NODE_LAUNCH 与 DEVELOPMENT 同步更新。
+
+测试精简按覆盖关系判断，不按 Mock 名字判断：
+
+| 删除的重复用例 | 保留覆盖与处理 |
+|---|---|
+| test_skills.py::test_unbound_catalog_contract_cannot_open_an_executor | 并入 test_invalid_registration_rejected_before_opening_journal 的 handler 分支，直接使用目录原项，仍验证拒绝且不创建日志 |
+| test_asr_node.py::test_close_ends_capture_without_dispatching_it | 并入 test_node_lifecycle.py 的 ASR 退出用例；正常关闭和取消两分支均验证线程退出后才关闭连接，且不向 Voice 发请求 |
+| test_processes.py::test_removed_wrs_backend_name_fails_before_process_start | 同步 launch 的非法 backend 用例已覆盖 LocalStack 验证；CLI 和 serve_node 继续保留 wrs_virtual 拒绝用例 |
+
+使用 Mock 验证停止确认、UNKNOWN、幂等、迟到模型/音频结果、故障恢复的测试继续保留。
+
+本轮实际运行：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/node_simplify_review.py
+git diff --check
+```
+
+完整 verify 退出 0，**652 单元 + 75 Zenoh + 13 WRS = 740 passed**，
+**0 failed/errors/skipped**；19 个有限示例、Ruff、doctor/WRS 虚拟探针通过。
+deselected 为互补分组，不计为跳过。导入合并后的 4 处排序问题经 Ruff 修正，完整验收无失败。
+23 项结构审查确认 Options 字段/校验与 Node 业务 AST 不变、旧配置导入全部迁移；
+用例清单从 655 变为 652，差集恰好是上述三个重复用例。
+git diff --check 退出 0，仅报告仓库既有 CRLF 转换提示。
+
+独立证据 reports/node_simplify_evidence/，汇总 node_simplify_verification.json，
+删除依据与审查 node_simplify_review.json，修改前快照 node_simplify_before/。
+本轮未改依赖：Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、Pydantic 2.13.5、
+pytest 9.1.1、pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS 固定提交 7815e6f110fd161fe3c3b7e6f978e5393c3cf502。
+付费模型、真实音频、物理机器人、双机和性能仍 UNVERIFIED。
+没有阻塞的软件验收项。未 commit/push；下一开发入口为 NODE_LAUNCH.md 和各节点 node.py。
+
+
+## 2026-09-25：移除 Agent MockClient
+
+AgentNode 只在 live_model=True 时创建 LLMClient/ModelPlanner；默认仍执行显式计划，
+自然语言目标返回 planner_unavailable_or_busy。同步 launch、System.launch、LocalStack 与
+CLI --live-model 使用同一个开关。provider/model_provider、deferred/deferred_planner 及测试释放 RPC 已删除。
+模型单元测试使用 LLMClient + HTTP 响应夹具，跨进程测试连接测试自有回环 HTTP 服务。
+
+删除只验证 Mock 关键词规则、替身客户端切换及重复非法提案的用例；缺失 plan 的校验
+并入三个协议的现有测试，取消、UNKNOWN、幂等、迟到输出、缓存和身份回归保留。
+改动涉及 nodes/agent/node.py、processes.py、__main__.py、system.py、sync.py，
+删除 planner/providers/mock.py；测试夹具在 tests/llm_fixtures.py，在线语音示例和启动指南同步修改。
+
+实际命令（固定解释器 D:\code\venv312\.venv\Scripts\python.exe）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py scripts/verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/integration/test_asr.py --junitxml=reports/agent_llm_asr_recheck.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check tests/integration/test_asr.py
+```
+
+完整命令首轮退出 1：647 单元、13 WRS 虚拟、19 个有限示例、Ruff、doctor 均通过；
+Zenoh 75 passed/1 failed。遗漏的是 ASR 识别文本提交规划的测试，添加显式回环模型配置后，
+该文件补跑 2 passed，补改后的 Ruff 也通过。原始失败不抹去，按测试标识合并最新结果为
+736 passed、0 failed/errors/skipped，无软件阻塞。相关定向单元另有 305 passed。
+
+Python 3.12.0；httpx 0.28.1、eclipse-zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8。默认 AgentNode 导入不加载 httpx，保留 core 可独立运行。
+本轮不改依赖锁或 WRS 提交。未验证云端推理、真实音频、实机、双机或性能。
+
+独立汇总 reports/agent_llm_verification.json，原始命令输出/XML 在 reports/agent_llm_evidence/，
+删除依据 reports/agent_llm_review.json。原有修改及并行语音文件合并保持，无 commit/push。
+下一入口为 [节点启动指南](NODE_LAUNCH.md)：配置 LLM_*，显式启用 live_model 即接入真实服务。
+
+## 2026-09-25：ASR/TTS 小文件合并与 Voice 职责说明
+
+VoiceNode 是识别/键入文本的意图分流与控制入口，补充其职责和线程/接口说明；
+普通目标送 Agent，明确停止走独立控制通道，仅停止播报直接取消 TTS，重复输入保持原目标。
+ASR 普通结果交还调用方，明确停止才直接转发 Voice。
+
+| 合并前 | 合并后 | 当前行数 |
+|---|---|---|
+| asr/capture.py + mock.py | asr/capture.py：麦克风录音、脚本文字采集 | 92 |
+| tts/backend.py + state.py + playback.py + mock.py | tts/backend.py：状态、声卡输出、合成/播放协调、离线播报 | 185 |
+
+ASR/TTS 各保留三个实现文件（node、capture/backend、qwen），包入口与 assets.json 原样保留。
+两目录普通文件从 14 减至 10。配置、Node 生命周期、模型适配保持独立；
+没有新增继承、抽象层、依赖或兼容空壳。旧模块导入迁移到 capture/backend，同步示例和开发指南。
+本轮只迁移测试导入，未增删用例；测试总量包含工作区同时进行的 Agent 模型清理。
+
+实际运行命令：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_speech.py tests/unit/test_asr_node.py tests/unit/test_node_lifecycle.py tests/unit/test_node_state.py --junitxml=reports/speech_compact_focused.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/speech_compact_verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/speech_compact_rerun_zenoh.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/speech_compact_review.py
+git -c core.safecrlf=false diff --check
+```
+
+完整验收脚本复制自 scripts/verify.py，只改报告输出路径，检查内容未改。
+首轮总体退出 1，唯一失败为 ASR 普通目标提交得到 planner_unavailable_or_busy：
+工作区删除了默认 MockClient，该集成用例尚未配置 Planner。
+另一组改动已为该用例补齐现有 llm_server 与 live_model=True，原断言不变。
+通信分组重新运行退出 0，最终检查状态见 acceptance_final.json；
+acceptance.json 和 zenoh_initial_failed.txt/xml 保留首轮失败，zenoh_rerun.json 记录重跑。
+相关 **64 passed**，完整 **647 单元 + 76 Zenoh + 13 WRS = 736 passed**，**0 failed/errors/skipped**；
+**19 个有限示例、Ruff、doctor/WRS 虚拟探针通过**。deselected 是互补分组。
+33 项审查通过：移动前后声明的行为 AST 不变，包入口/清单逐字节不变，旧导入无残留，
+导入语音模块不加载 numpy、sounddevice、Torch 或 Qwen SDK。没有调用真实音频/模型。
+
+本轮原始证据 reports/speech_compact_evidence/，汇总 speech_compact_verification.json；
+结构审查 speech_compact_review.py/json，修改前文件 speech_compact_before/。
+实际环境：Python 3.12.0、eclipse-zenoh/zenohd 1.9.0、
+Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS 7815e6f110fd161fe3c3b7e6f978e5393c3cf502。依赖与锁文件未改。
+真实音频、付费模型、物理硬件、双机及性能仍 UNVERIFIED；无阻塞的软件验收项。
+未 commit/push；后续从 NODE_LAUNCH.md 的职责/目录说明和各节点 node.py 进入。
+
+## 2026-09-25：Runtime 状态合并与小模块审查
+
+TaskExecution、ExecutionState、PlanningState 移入 runtime.py 的 Runtime 类前；
+runtime_state.py 删除，原字段、创建/复制方法及独立 dataclass 保留。
+包含技能发现新增的 bindings/specs/boots。开发目录说明同步更新。
+本轮不修改其他候选、不增删测试；62 个 Python 模块的合并取舍见 DEVELOPMENT.md。
+
+合并前后四个类 AST 相同；首次记录 runtime.py 从 906 到 957 行。
+随后并行技能发现工作更新 _fence, enqueue, goal, start，
+本轮保留这些后续改动，未将它们归作文件合并。合并时证据与当前审查分别保留。
+
+实际命令：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit/test_runtime.py tests/unit/test_task_cancel.py tests/unit/test_revision_regressions.py --junitxml=reports/runtime_merge_focused_latest.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/runtime_merge_verify.py --wrs
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/runtime_merge_lint_recheck.py
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 reports/runtime_merge_review.py
+git -c core.safecrlf=false diff --check
+```
+
+runtime_merge_verify.py 与 scripts/verify.py 仅报告路径不同，避免覆盖其他工作的证据。
+**完整验收退出 1，未全绿**：单元 **650 passed**，
+Zenoh **74 passed / 3 failed**，
+WRS 虚拟 **13 passed**，各组 **0 errors/skipped**；
+19 个有限示例及 doctor/WRS 探针通过。deselected 为互补分组。
+Runtime 专项初次和当前复验均 **34 passed**，本轮 Runtime 静态检查通过。
+首次整仓 Ruff 的 17 项导入/行宽问题来自正在迁移的技能发现文件；并行工作更新后，
+**整仓 Ruff 复验通过**，首轮失败未覆盖或改写。
+
+剩余失败均在 tests/integration/test_system.py：
+
+| 用例 | 本轮观察到的失败 |
+|---|---|
+| test_runtime_cancel_has_no_normal_feature_query | 在 start 前禁用 features，当前发现阶段缺失合同，返回 provider_not_found，尚未进入取消 |
+| test_unready_provider_prevents_partial_task_effects | start 已返回 provider_not_found；旧用例期望先取得任务句柄再得到 FAILED |
+| test_configuration_cannot_grant_an_unregistered_node_skill | 旧用例假定默认配置存在 pick = wrs；当前默认路由已改为发现 |
+
+这些是并行技能发现改造尚待处理的全仓验收项。本轮不回退其接口、不删除用例，
+也不把单纯文件合并描述为全仓行为已通过。后续在该改造中修复并重跑相关集成。
+合并本身与小模块审查已完成；完整集成验证尚有上述失败。
+
+汇总 reports/runtime_merge_verification.json，原始报告 runtime_merge_evidence/；
+runtime_merge_review_at_merge.json 保存四类初始 AST 一致证据，
+runtime_merge_review.json 记录当前状态类与后续方法差异，runtime_merge_inventory.json 保存盘点。
+Runtime 修改前文件在 runtime_merge_before/。
+
+实际环境：Python 3.12.0、Zenoh/zenohd 1.9.0、
+Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS 7815e6f110fd161fe3c3b7e6f978e5393c3cf502。本轮依赖、锁文件及硬件边界未改。
+付费模型、真实音频、物理设备、跨机与性能仍 UNVERIFIED。未 commit/push。
+
+
+## 2026-09-25：技能单入口、发现与显式动态追加
+
+后端绑定表是执行与发现的唯一来源；删除跨进程 register_greet/中央 SKILLS。
+节点部署 TOML 保留，普通配置不再列出逐技能路由。新增 Node.add_skills(*skills)，
+与构造时的追加逻辑统一；批次原子、同名拒绝、元数据复制、线程与关闭边界已验证。
+不实现替换、卸载、自动安装或代码热加载。
+
+完整合同通过既有 request/features 发布，skill_revision 使追加后目录缓存失效。
+独立 Agent/客户端无需导入具体技能；超过八个技能仍完整列出。显式/发现版本统一解析，
+同名提供者报歧义，指定提供者离线不转移旧任务。暂停节点可查询合同但不能执行。
+纯批量参数预检覆盖 JSON Schema 无法表达的 Python 跨字段校验，任一步不合法则零动作。
+动态追加期间已开始的任务仍使用原节点和合同；原取消、UNKNOWN、幂等和重启回归保留。
+
+最终：**651 单元 + 77 Zenoh + 13 WRS = 741 passed**，**0 未解决 failed/errors/skipped**；
+**19 个有限示例、Ruff、doctor/WRS 虚拟探针、diff --check 通过**。
+完整运行使用固定解释器，经 scripts/run.py 执行 reports/skill_discovery_verify.py --wrs；
+该脚本与 scripts/verify.py 检查内容相同，只改变报告路径。
+首轮整体退出 1，仅新导入测试使用不支持的 run.py -c；修正测试入口后完整单元复跑 651 passed。
+原始失败不覆盖，最终验收见 reports/skill_discovery_evidence/acceptance_final.json。
+精确命令、依赖版本、修改文件与中间失败记录见 reports/skill_discovery_verification.json。
+
+Python 3.12.0、Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1、pytest-asyncio 1.4.0、
+Ruff 0.16.8；WRS 7815e6f110fd161fe3c3b7e6f978e5393c3cf502。
+未运行付费模型、真实音频、实机、跨机或性能；无软件阻塞，未 commit/push。
+下一开发入口：[技能库](../wrs_agent/skills/README.md) 与 examples/nodes/。
+
+## 2026-09-25：内置节点入口合并
+
+nodes/builtin.py 已删除；列表 NODES、参数映射 node_options 与 serve_node 集中到
+nodes/serve.py（38 行）。CLI 与 LocalStack 更新导入，DEVELOPMENT/NODE_LAUNCH 更新说明。
+三项定义的 AST 与合并前一致，两个调用方除导入外 AST 不变；未增删测试。
+
+实际命令（PowerShell，以下各项均通过）：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m pytest -q tests/unit tests/integration/test_custom_nodes.py tests/integration/test_nodes.py tests/integration/test_developer_examples.py tests/integration/test_connect.py tests/integration/test_sync_api.py --junitxml=reports/node_entry_merge_tests.xml
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m ruff check wrs_agent tests examples scripts
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py -m wrs_agent --help
+```
+
+651 个单元测试、20 个相关集成测试通过，0 failed/errors/skipped，耗时 48.38 秒；
+集成项包含独立进程节点/客户端示例与自定义节点示例。Ruff 和 CLI 帮助入口通过。
+环境：Python 3.12.0、eclipse-zenoh 1.9.0、
+Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8；依赖未修改。
+证据 reports/node_entry_merge_tests.xml/.txt、node_entry_merge_lint.txt、
+node_entry_merge_cli.txt；汇总 node_entry_merge_verification.json，
+结构核对 node_entry_merge_structure.json，修改前备份 node_entry_merge_before/。
+本轮未重跑全量集成或 WRS 专项，不覆盖前一轮其余集成失败的状态；
+未调用付费模型、真实音频或物理设备。其他小模块候选仍仅保留在 DEVELOPMENT.md 中。
+
+
+## 2026-09-25：部署清单与动态节点发现分离（完成）
+
+launch/LocalStack 读取部署 TOML、传入各节点自身参数，并只清理自己启动的进程。
+Node/Agent 不再持有 definitions，System.connect 默认不读部署文件。
+显式 bindings 入口仅做兼容转换，不是发现白名单；自定义节点可以晚加入。
+同一 site/env 的节点自行发布地址与启动身份，Registry 是消费者内部目录，不新增中心进程。
+目录核验实例和描述，离线/重启及时失效，重复实例和动作地址冲突拒绝调度。
+Runtime 固定每个任务的提供者、客户端、合同与 boot_id，旧任务不会换到重启实例。
+取消走已绑定控制通道，不等待普通目录查询；目录超时不阻断已绑定任务取消。
+Voice/ASR 等待依赖可取消，启动期限统一由 launch 掌握；Qwen 全栈预算 300 秒，普通栈 10 秒。
+
+实际命令：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/dynamic_nodes_complete_verify.py --wrs
+git -c core.safecrlf=false diff --check
+```
+
+验收脚本与 scripts/verify.py 的检查内容相同，只改独立报告路径和父目录创建。
+**675 单元 + 90 Zenoh + 13 WRS 虚拟 = 778 passed；0 failed/errors/skipped。**
+**20 个有限示例、Ruff、doctor/WRS 虚拟探针和 diff --check 均通过。**
+覆盖新节点晚加入、退出/重启、旧任务实例隔离、重复身份/动作地址冲突、通信域隔离、
+鉴权错误保持、关闭与刷新交错、目录失败后的取消，以及依赖晚于原 10 秒上线。
+慢启动测试使用 Mock TTS 和真实 Zenoh，未加载 Qwen 模型。
+新增可运行示例 examples/nodes/06_late_node.py，展示 Agent 启动后发现部署文件外的节点。
+
+迁移期间的静态占位假设、鉴权错误误报及首次描述超时已修复；原始失败证据保留。
+另一次合并 unit/integration 进程的试跑为 770 passed / 1 failed，原因是 unit 导入 WRS
+污染客户端未导入 WRS 的 sys.modules 断言；最终采用仓库标准分进程验证，该断言保留并通过。
+最终证据 reports/dynamic_nodes_evidence/complete/；
+精确命令、环境、修改范围和历史失败见 reports/dynamic_nodes_verification.json。
+
+Python 3.12.0、Zenoh 1.9.0、
+Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8；
+WRS 7815e6f110fd161fe3c3b7e6f978e5393c3cf502，工作树干净。本轮未改依赖/锁文件。
+付费模型、真实音频、实机、跨机和性能仍 UNVERIFIED；无软件阻塞，未 commit/push。
+下一入口 docs/NODE_LAUNCH.md 与 examples/nodes/06_late_node.py。
+
+
+## 2026-09-28：节点与技能重构提交前验收
+
+审查并收齐 Node 生命周期、launch/Registry 分离、Runtime 任务状态整理、技能单入口、
+MockClient 移除及相应调用方、测试、示例和包资源迁移。模型测试使用真实 LLMClient，
+通过隔离的 HTTP 响应夹具验证，不产生付费模型请求。
+
+Skill 直接接收参数模型与可选 handler，自动生成 SkillSpec；多后端共享合同保留 bind。
+删除 required_features 与未实现的 interrupt_mode；前置条件和 verification 字符串仅为说明。
+Registry 回收离线描述并使能力缓存失效；超额声明仍参与地址冲突检查，容量拒绝不影响
+无冲突的已接纳节点。已绑定控制连接独立于描述缓存；Voice 在各依赖就绪时立即保存连接。
+旧任务保留原客户端、合同和启动身份，目录更新不会把旧动作转交给新实例。
+
+实际运行命令：
+
+```powershell
+& 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py reports/commit_review_verify.py --wrs
+git -c core.safecrlf=false diff --cached --check
+```
+
+本地验收脚本与 scripts/verify.py 的检查内容一致，仅将报告写入独立目录并创建父目录。
+在其他 checkout 可用 `python -X utf8 -S scripts/run.py scripts/verify.py --wrs` 复现。
+**684 单元 + 91 Zenoh + 13 WRS 虚拟 = 788 passed，0 failed/errors/skipped。**
+**20 个有限示例、Ruff、doctor/WRS 虚拟探针与暂存差异检查均通过。**
+测试期间源码未变化；验收后只补充本记录。完整命令、输出、版本与审查清单分别保存在
+reports/commit_review_evidence/ 和 reports/commit_review_inventory.json，本地生成报告不提交。
+
+上一轮技能精简验收曾发现占位描述、容量错误分类、离线能力缓存和 Voice 启动竞态问题，
+这些问题已修复；首轮失败输出保留在 reports/skill_simplify_evidence/complete/。
+随后一次验收中断，仅有单元结果；本次重新完成全部分组，未放宽测试期限或删除失败断言。
+
+Python 3.12.0、Zenoh/zenohd 1.9.0、Pydantic 2.13.5、pytest 9.1.1、
+pytest-asyncio 1.4.0、Ruff 0.16.8；WRS 7815e6f110fd161fe3c3b7e6f978e5393c3cf502，
+submodule 工作树干净。pyproject 只迁移包资源声明，依赖、锁文件及 WRS 指针未变。
+付费模型、真实音频、物理设备、跨机和性能仍 UNVERIFIED。
+目录描述、在线声明、保留连接和技能所有者的上限分别为 64、1024、128、4096。
+节点与客户端需同步更新以使用调整后的接口与线协议。
+下一入口：[技能编写](../wrs_agent/skills/README.md) 与 examples/nodes/06_late_node.py。

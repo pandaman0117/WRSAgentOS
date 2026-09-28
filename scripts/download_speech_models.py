@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from wrs_agent.speech.assets import manifest, model_root, verify_file
+from wrs_agent.nodes.model_assets import manifest, model_root, verify_file
 
 
 def download(kind, root):

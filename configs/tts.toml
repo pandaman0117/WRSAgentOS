@@ -3,6 +3,3 @@ type = "tts"
 suffix = "-tts"
 actions = true
 enabled = true
-
-[skills]
-speak = "tts"

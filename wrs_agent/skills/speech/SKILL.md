@@ -14,5 +14,5 @@ description: Plan a spoken status message with the available speak skill while i
 
 播报由独立 TTS 节点执行。取消播报只针对这次播报动作。
 Mock TTS 只验证模拟状态，不产生真实音频。可选 Qwen TTS 在本地合成并播放；
-成功表示输出流已经排空，不表示听者确认听到。具体后端与停止范围查询节点 capabilities。
+成功表示输出流已经排空，不表示听者确认听到。具体后端与停止范围查询节点 features。
 参数和验证约束以一起提供的 SkillSpec 为准。

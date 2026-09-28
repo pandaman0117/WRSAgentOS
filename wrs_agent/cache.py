@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from wrs_agent.schemas import Plan, SceneData
-from wrs_agent.skills import SKILLS
+from wrs_agent.skills import skill_specs
 
 TRANSFER = ("observe", "pick", "place", "verify")
 NAME = r"[A-Za-z][A-Za-z0-9_-]{0,39}"
@@ -35,15 +35,16 @@ def parse_intent(goal):
     return None
 
 
-def applicability(intent, worlds, capabilities, bindings):
+def applicability(intent, worlds, features, bindings):
     node_names = {bindings.get(name) for name in TRANSFER}
     if len(node_names) != 1:
         return None, "binding_changed"
     node_name = next(iter(node_names))
-    world, cap = worlds.get(node_name), capabilities.get(node_name)
+    world, cap = worlds.get(node_name), features.get(node_name)
     if world is None or cap is None or not set(TRANSFER).issubset(cap.skills):
-        return None, "capability_missing"
-    if any(cap.skills[name] != SKILLS[name].spec.version for name in TRANSFER):
+        return None, "feature_missing"
+    contracts = skill_specs(features, bindings)
+    if not set(TRANSFER).issubset(contracts):
         return None, "skill_version_mismatch"
     if world.admission != "OPEN" or not world.stop_confirmed or world.active_action:
         return None, "state_not_ready"
@@ -57,17 +58,17 @@ def applicability(intent, worlds, capabilities, bindings):
     calibration = world.data.facts.get("calibration")
     if not isinstance(calibration, str) or not calibration:
         return None, "calibration_missing"
-    specs = {name: SKILLS[name].spec.model_dump() for name in TRANSFER}
+    specs = {name: contracts[name].model_dump() for name in TRANSFER}
     return {
         "location": obj.location,
         "calibration": calibration,
         "skills": sha256(json.dumps(specs, sort_keys=True).encode()).hexdigest(),
         "node": node_name,
-        "capability": cap.model_dump(),
+        "features": cap.model_dump(exclude={"boot_id", "skill_revision"}),
     }, ""
 
 
-def parameterize(plan, intent):
+def parameterize(plan, intent, specs):
     if tuple(step.skill for step in plan.steps) != TRANSFER:
         return None
     expected = [
@@ -81,7 +82,7 @@ def parameterize(plan, intent):
         if (
             step.args != expected[index]
             or step.depends_on != dependencies
-            or step.version != SKILLS[step.skill].spec.version
+            or step.version != specs[step.skill].version
             or step.category != "interactive"
         ):
             return None
@@ -114,7 +115,7 @@ class PlanCache:
         self.shadow_candidate = None
         self.failures = OrderedDict()
 
-    def lookup(self, goal, worlds, capabilities, bindings):
+    def lookup(self, goal, worlds, features, bindings):
         self.last_hit = False
         self.shadow_candidate = None
         intent = parse_intent(goal)
@@ -123,7 +124,7 @@ class PlanCache:
             self.shadow_candidate = next(
                 (key for key in self.entries if key.startswith(f"transfer:{intent.object}:")), None
             )
-            conditions, reason = applicability(intent, worlds, capabilities, bindings)
+            conditions, reason = applicability(intent, worlds, features, bindings)
             entry = self.entries.get(intent.signature)
             if not reason:
                 if entry is None:
@@ -151,13 +152,13 @@ class PlanCache:
             self.hits += 1
         return plan
 
-    def remember(self, goal, plan, worlds, capabilities, bindings):
+    def remember(self, goal, plan, worlds, features, bindings):
         """Call only after the task's postconditions were verified by execution."""
         intent = parse_intent(goal)
         if intent is None:
             return False
-        conditions, reason = applicability(intent, worlds, capabilities, bindings)
-        template = parameterize(plan, intent)
+        conditions, reason = applicability(intent, worlds, features, bindings)
+        template = None if reason else parameterize(plan, intent, skill_specs(features, bindings))
         if reason or template is None:
             return False
         self.entries[intent.signature] = CacheEntry(template, conditions)

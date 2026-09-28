@@ -20,7 +20,7 @@ def main():
     if args.component == "tts":
         import soundfile as sf
 
-        from wrs_agent.speech.tts import QwenTTS
+        from wrs_agent.nodes.tts.qwen import QwenTTS
 
         model = QwenTTS()
         loaded = time.perf_counter() - started
@@ -70,7 +70,7 @@ def main():
         import soundfile as sf
         from scipy.signal import resample_poly
 
-        from wrs_agent.speech.asr import QwenASR
+        from wrs_agent.nodes.asr.qwen import QwenASR
 
         model = QwenASR(vocabulary=[
             "向上", "向下", "向左", "向右", "向前", "向后", "回到初始位置",

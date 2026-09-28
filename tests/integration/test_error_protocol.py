@@ -17,7 +17,7 @@ async def test_incompatible_restarted_node_blocks_plan_and_retains_error_for_rec
         before = (await system.nodes())["tts"]["boot_id"]
         tts = system.clients["tts"]
         worker = stack.processes[2]
-        await tts.transport.request("request/tts/shutdown", {}, control=True)
+        await tts.transport.request("request/node/tts/shutdown", {}, control=True)
         await asyncio.to_thread(worker.wait, timeout=3)
         stack.processes.remove(worker)
         stack._spawn(
@@ -37,19 +37,17 @@ async def test_incompatible_restarted_node_blocks_plan_and_retains_error_for_rec
                 "0.02",
             ),
         )
-        await stack._wait_ready(tts.transport, "request/capabilities")
+        await stack._wait_ready("tts")
         view = await eventually(
             system.nodes,
             lambda rows: rows["tts"]["ready"] and rows["tts"]["boot_id"] != before,
         )
         assert view["tts"]["skills"] == {"speak": 2}
-        assert (await tts.capabilities()).skills == {"speak": 2}
-        assert "speak" not in {s.name for s in await system.skills()}
-        with pytest.raises(AgentError) as caught:
-            await system.action("speak", text="wrong contract")
-        assert caught.value.code == "skill_version_mismatch"
+        assert (await tts.features()).skills == {"speak": 2}
+        assert next(s for s in await system.skills() if s.name == "speak").version == 2
         task = await system.start(
-            step("move_named_pose", pose="B"), step("speak", text="must not run")
+            step("move_named_pose", pose="B"),
+            step("speak", text="must not run").model_copy(update={"version": 1})
         )
         result = await task.wait()
         assert result.state == "FAILED"
@@ -65,6 +63,9 @@ async def test_incompatible_restarted_node_blocks_plan_and_retains_error_for_rec
         # A mismatch on an unused resource must not block a new robot-only task.
         independent = await system.start(step("move_named_pose", pose="B"))
         assert (await independent.wait()).state == "SUCCEEDED"
+        inferred = await system.action("speak", text="use discovered version")
+        assert inferred.request.version == 2
+        assert (await inferred.wait()).state == "SUCCEEDED"
 
 
 async def test_structured_rpc_errors_keep_identity_without_exposing_exception_inputs():
@@ -107,7 +108,7 @@ async def test_structured_rpc_errors_keep_identity_without_exposing_exception_in
                 assert caught.value.code == code and caught.value.error.node_id == "tts"
                 assert "private-test-value" not in str(caught.value.error.model_dump())
             with pytest.raises(RemoteError) as caught:
-                await unauthenticated.request("request/capabilities", {})
+                await unauthenticated.request("request/features", {})
             assert caught.value.code == "unauthorized" and caught.value.error.node_id == "tts"
         finally:
             await caller.close()

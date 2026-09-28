@@ -5,8 +5,8 @@ from conftest import action, eventually
 from test_runtime import OfflineNode, motion
 
 from wrs_agent.bindings import load_bindings
-from wrs_agent.nodes.tts import make_mock_tts
-from wrs_agent.nodes.voice import register_voice
+from wrs_agent.nodes.tts.backend import make_mock_tts
+from wrs_agent.nodes.voice import VoiceNode
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import ActionStatus, Plan, Step, TaskCancelRequest, TaskRequest
 
@@ -47,7 +47,7 @@ async def test_cancel_then_start_ignore_unrelated_offline_node(make_env):
     env = make_env(duration=0.1)
 
     class Offline:
-        async def capabilities(self):
+        async def features(self):
             raise AssertionError("unrelated node queried")
 
         async def snapshot(self, **kwargs):
@@ -135,8 +135,9 @@ async def test_voice_retry_and_concurrent_duplicates_share_control(make_env, fai
 
     node.snapshot, node.control = snapshot, control
     bus = Bus()
-    register_voice(bus, node, None, None)
-    handle = bus.handlers["request/voice/control"]
+    voice = VoiceNode()
+    voice.transport, voice.wrs = bus, node
+    handle = voice.control_event
     event = {"event_id": "stop-once", "kind": "stop"}
     try:
         with pytest.raises(TimeoutError):
@@ -157,6 +158,7 @@ async def test_voice_retry_and_concurrent_duplicates_share_control(make_env, fai
             await handle({**event, "kind": "barge_in"})
     finally:
         release.set()
+        await voice.teardown()
         await env.close()
 
 
@@ -193,20 +195,19 @@ async def test_task_history_survives_queue_cancel_and_returns_detached_results(m
         await env.close()
 
 
-async def test_result_capacity_rejects_without_overwriting_existing_records(make_env):
+async def test_result_capacity_rejects_without_overwriting_existing_records(make_env, make_llm):
     from wrs_agent.planner import ModelPlanner
-    from wrs_agent.planner.providers.mock import MockClient
     from wrs_agent.schemas import GoalRequest
 
     env = make_env(duration=0.01)
     runtime = Runtime(
         {"wrs": OfflineNode(env)},
         load_bindings()[1],
-        ModelPlanner(MockClient('{"kind":"answer","text":"saved answer"}')),
+        ModelPlanner(make_llm('{"kind":"answer","text":"saved answer"}')),
     )
     try:
         await runtime.goal(GoalRequest(request_id="question", goal="status"))
-        await runtime.planning
+        await runtime.planning.worker
         assert runtime.goal_status("question")["state"] == "ANSWER"
         first = await runtime.start(TaskRequest(request_id="first", plan=motion()))
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
@@ -304,7 +305,7 @@ async def test_cancelling_blocks_new_tasks_until_all_old_resources_stop(make_env
         for index in range(2):
             with pytest.raises(ValueError, match="task_busy"):
                 await runtime.start(TaskRequest(request_id=f"next-{index}", plan=speech))
-        assert tts.executions == 0 and runtime.state == "CANCELLING"
+        assert tts.executions == 0 and runtime.execution.state == "CANCELLING"
         release.set()
         await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
         assert runtime.task_status(first["task_id"])["state"] == "CANCELLED"
@@ -348,9 +349,8 @@ async def test_control_change_waits_for_known_action_stop_result(make_env):
         await env.close()
 
 
-async def test_later_planning_failure_does_not_change_completed_task(make_env):
+async def test_later_planning_failure_does_not_change_completed_task(make_env, make_llm):
     from wrs_agent.planner import ModelPlanner
-    from wrs_agent.planner.providers.mock import MockClient
     from wrs_agent.schemas import GoalRequest
 
     env = make_env(duration=0.01)
@@ -358,7 +358,7 @@ async def test_later_planning_failure_does_not_change_completed_task(make_env):
         {"wrs": OfflineNode(env)},
         load_bindings()[1],
         ModelPlanner(
-            MockClient(
+            make_llm(
                 '{"kind":"execute","plan":{"steps":[{"step_id":"bad","skill":"unregistered"}]}}'
             )
         ),
@@ -367,7 +367,7 @@ async def test_later_planning_failure_does_not_change_completed_task(make_env):
         first = await runtime.start(TaskRequest(request_id="first", plan=motion()))
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         await runtime.goal(GoalRequest(request_id="bad-goal", goal="unsupported"))
-        await runtime.planning
+        await runtime.planning.worker
         assert runtime.goal_status("bad-goal")["state"] == "FAILED"
         assert runtime.task_status(first["task_id"])["state"] == "SUCCEEDED"
         assert runtime.task_status(first["task_id"])["reason"] == ""

@@ -1,12 +1,11 @@
 from copy import deepcopy
-from dataclasses import replace
 
 import pytest
+from skill_fixtures import features
 
 from wrs_agent.cache import PlanCache, parse_intent
 from wrs_agent.schemas import (
     ActionContext,
-    CapabilitySnapshot,
     NodeSnapshot,
     ObjectData,
     Plan,
@@ -14,7 +13,6 @@ from wrs_agent.schemas import (
     SceneData,
     Step,
 )
-from wrs_agent.skills import SKILLS
 
 BINDINGS = {name: "wrs" for name in ("observe", "pick", "place", "verify")}
 
@@ -38,7 +36,7 @@ def context():
                            facts={"calibration": "v1"}),
         )
     }
-    caps = {"wrs": CapabilitySnapshot(skills=dict.fromkeys(BINDINGS, 1))}
+    caps = {"wrs": features(BINDINGS)}
     return worlds, caps
 
 
@@ -92,7 +90,7 @@ def test_strict_hit_unrelated_change_new_authority_and_no_cached_grants():
 
 @pytest.mark.parametrize(
     "change",
-    ["location", "calibration", "capabilities", "held", "unknown", "schema", "skill", "binding"],
+    ["location", "calibration", "features", "held", "unknown", "schema", "skill", "binding"],
 )
 def test_applicability_change_rejects(change, monkeypatch):
     cache = PlanCache()
@@ -108,8 +106,8 @@ def test_applicability_change_rejects(change, monkeypatch):
         worlds["wrs"] = world.model_copy(
             update={"data": world.data.model_copy(update={"facts": {"calibration": "v2"}})}
         )
-    elif change == "capabilities":
-        caps["wrs"] = CapabilitySnapshot(skills={"observe": 1})
+    elif change == "features":
+        caps["wrs"] = features(["observe"])
     elif change == "held":
         worlds["wrs"] = world.model_copy(
             update={"data": world.data.model_copy(update={"robot": RobotData(held_object="A")})}
@@ -121,11 +119,8 @@ def test_applicability_change_rejects(change, monkeypatch):
     elif change == "binding":
         bindings["pick"] = "different-node"
     else:
-        monkeypatch.setitem(
-            SKILLS,
-            "pick",
-            replace(SKILLS["pick"], spec=SKILLS["pick"].spec.model_copy(update={"version": 2})),
-        )
+        caps["wrs"].specs["pick"] = caps["wrs"].specs["pick"].model_copy(update={"version": 2})
+        caps["wrs"].skills["pick"] = 2
     assert cache.lookup("put A in B", worlds, caps, bindings) is None
     assert cache.reject_reason
 
@@ -146,13 +141,8 @@ def test_changed_skill_guidance_invalidates_cached_plan(monkeypatch):
     cache = PlanCache()
     worlds, caps = context()
     assert cache.remember("put A in B", plan(), worlds, caps, BINDINGS)
-    monkeypatch.setitem(
-        SKILLS,
-        "pick",
-        replace(
-            SKILLS["pick"],
-            spec=SKILLS["pick"].spec.model_copy(update={"instructions": "changed guidance"}),
-        ),
+    caps["wrs"].specs["pick"] = caps["wrs"].specs["pick"].model_copy(
+        update={"instructions": "changed guidance"}
     )
     assert cache.lookup("put A in B", worlds, caps, BINDINGS) is None
     assert cache.reject_reason

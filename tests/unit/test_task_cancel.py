@@ -7,7 +7,7 @@ from conftest import control, eventually
 from test_runtime import OfflineNode, motion
 
 from wrs_agent.bindings import load_bindings
-from wrs_agent.nodes.tts import make_mock_tts
+from wrs_agent.nodes.tts.backend import make_mock_tts
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import ActionStatus, Plan, Step, TaskCancelRequest, TaskRequest
 
@@ -35,7 +35,7 @@ async def test_cancel_fences_idle_tts_before_delayed_submit(tmp_path):
         )
         assert receipt["phase"] == "STOPPING"
         await eventually(speech.snapshot, lambda s: s.control_epoch > 0)
-        assert runtime.state == "CANCELLING"
+        assert runtime.execution.state == "CANCELLING"
         release.set()
         await eventually(runtime.snapshot, lambda s: s["state"] == "CANCELLED")
         assert speech.executions == 0 and speech.admission == "OPEN"
@@ -116,7 +116,7 @@ async def test_restart_during_cancel_does_not_control_new_instance(make_env):
         await eventually(old.snapshot, lambda s: s.active_action is not None)
         await runtime.cancel(TaskCancelRequest(request_id="stop", task_id=task["task_id"]))
         await eventually(runtime.snapshot, lambda s: s["state"] == "UNKNOWN")
-        assert runtime.error.code == "node_instance_changed"
+        assert runtime.execution.error.code == "node_instance_changed"
         assert new.epoch == 0 and new.executions == 0
     finally:
         await runtime.close()

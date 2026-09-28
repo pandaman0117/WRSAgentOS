@@ -211,7 +211,8 @@ class UR7eDH50:
                     self.control.servoJ(goal, 0.0, 0.0, self.dt, LOOKAHEAD, GAIN)
                     actual = self.receive.getActualQ()
                     self.control.waitPeriod(start)
-                    if max(abs(a - g) for a, g in zip(actual, goal, strict=True)) <= SETTLE_TOLERANCE:
+                    error = max(abs(a - g) for a, g in zip(actual, goal, strict=True))
+                    if error <= SETTLE_TOLERANCE:
                         break
         finally:
             self.control.servoStop(STOP_DECELERATION)

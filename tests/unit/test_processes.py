@@ -69,8 +69,7 @@ def test_router_version_probe_failure_is_not_accepted(error):
     "arguments",
     [
         ["agent", "--model-provider", "llm"],
-        ["agent", "--model-provider", "llm", "--live-model", "--deferred-planner"],
-        ["agent", "--model-provider", "glm", "--live-model"],
+        ["agent", "--deferred-planner"],
         ["wrs", "--duration", "0"],
         ["wrs", "--backend", "hardware"],
         ["wrs", "--backend", "wrs_virtual"],
@@ -109,23 +108,26 @@ async def test_connect_rejects_missing_or_invalid_credential_before_open(monkeyp
             pytest.fail("Connection must not be admitted")
 
 
-async def test_partial_connection_failure_closes_previously_opened_sessions(monkeypatch):
+async def test_directory_setup_failure_closes_the_connection(monkeypatch):
     from wrs_agent import System
 
     monkeypatch.setenv("WRS_AGENT_TOKEN", "unit-credential-only")
     opened, closed = [], []
 
     class ConnectionFixture:
-        def __init__(self, *args):
-            if opened:
-                raise OSError("second session failed")
+        def __init__(self, endpoint, site, env_id, token, source):
+            self.endpoint, self.site, self.env_id = endpoint, site, env_id
             opened.append(self)
 
         async def close(self):
             closed.append(self)
 
+    def fail_directory(*args, **kwargs):
+        raise OSError("directory setup failed")
+
     monkeypatch.setattr("wrs_agent.system.Transport", ConnectionFixture)
-    with pytest.raises(OSError, match="second session"):
+    monkeypatch.setattr("wrs_agent.system.NodeRegistry", fail_directory)
+    with pytest.raises(OSError, match="directory setup failed"):
         async with System.connect():
             pytest.fail("Partial connection must not be admitted")
     assert len(opened) == 1 and closed == opened
@@ -158,17 +160,16 @@ def test_local_namespace_rejected_before_creating_files_or_processes(env_id):
     "role, options, reason",
     [
         ("unknown", {}, "unsupported_node_role"),
-        ("agent", {"action_factory": lambda journal: None}, "action_factory_requires"),
-        ("wrs", {"backend": "hardware"}, "unsupported_backend"),
-        ("wrs", {"backend": "wrs_virtual"}, "unsupported_backend"),
-        ("wrs", {"duration": 0}, "invalid_duration"),
-        ("agent", {"model_provider": "llm"}, "missing_live_opt_in"),
+        ("agent", {"unexpected": True}, "Extra inputs are not permitted"),
+        ("wrs", {"backend": "hardware"}, "backend"),
+        ("wrs", {"backend": "wrs_virtual"}, "backend"),
+        ("wrs", {"duration": 0}, "greater than 0"),
+        ("agent", {"provider": "mock"}, "Extra inputs are not permitted"),
         (
             "agent",
-            {"model_provider": "llm", "live_model": True, "deferred_planner": True},
-            "invalid_model_provider",
+            {"deferred_planner": True},
+            "Extra inputs are not permitted",
         ),
-        ("agent", {"model_provider": "glm", "live_model": True}, "invalid_model_provider"),
     ],
 )
 async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role, options, reason):
@@ -177,10 +178,10 @@ async def test_python_node_entry_rejects_invalid_configuration(monkeypatch, role
     def unexpected(*args):
         pytest.fail("Invalid configuration must not acquire a lock or open a transport")
 
-    monkeypatch.setattr("wrs_agent.nodes.serve.InstanceLock", unexpected)
-    monkeypatch.setattr("wrs_agent.nodes.serve.Transport", unexpected)
+    monkeypatch.setattr("wrs_agent.nodes.node.InstanceLock", unexpected)
+    monkeypatch.setattr("wrs_agent.nodes.node.Transport", unexpected)
     with pytest.raises(ValueError, match=reason):
-        await serve_node(role, **options)
+        await serve_node(role, options=options)
 
 
 @pytest.mark.parametrize("filename", ["01_plan.py", "02_execute.py"])
@@ -327,8 +328,64 @@ def test_version_check_uses_configured_router(monkeypatch, tmp_path):
     )
 
 
-def test_removed_wrs_backend_name_fails_before_process_start():
+def test_local_launch_passes_only_each_nodes_own_startup_parameters():
+    import json
+
     from wrs_agent.processes import LocalStack
 
-    with pytest.raises(ValueError, match="unsupported_backend"):
-        LocalStack(backend="wrs_virtual")
+    stack = LocalStack()
+    stack.endpoint = "tcp/127.0.0.1:12345"
+    agent = stack.node_command("agent")
+    voice = stack.node_command("voice")
+    assert "--bindings" not in agent and "--bindings" not in voice
+    assert "--suffix=" in agent and "--no-actions" in agent
+    assert json.loads(agent[agent.index("--peers") + 1]) == {}
+    assert json.loads(voice[voice.index("--peers") + 1]) == {
+        "wrs": "wrs", "tts": "tts", "agent": "agent",
+    }
+
+
+async def test_standalone_node_entry_does_not_read_a_deployment_file(monkeypatch):
+    from wrs_agent.nodes import Node
+    from wrs_agent.nodes.serve import serve_node
+
+    constructed = []
+
+    class Standalone(Node):
+        async def _serve(self):
+            constructed.append(self)
+
+    def unexpected(*args):
+        pytest.fail("Standalone Node must not read a launch profile")
+
+    monkeypatch.setattr("wrs_agent.nodes.serve.load_bindings", unexpected)
+    await serve_node(Standalone, node_id="late-worker", actions=True)
+    instance, = constructed
+    assert instance.target == "arm01-late-worker" and instance.action_service
+    assert not hasattr(instance, "definitions")
+
+
+async def test_explicit_node_profile_is_resolved_only_at_the_entry_point(monkeypatch, tmp_path):
+    from wrs_agent.nodes import Node
+    from wrs_agent.nodes.serve import serve_node
+
+    config = tmp_path / "launch.toml"
+    config.write_text(
+        '[nodes.worker]\ntype="custom"\nsuffix="-work"\nactions=true\nenabled=true\n'
+        '[nodes.speaker]\ntype="tts"\nsuffix="-speech"\nactions=true\nenabled=true\n'
+        '[skills]\nspeak="speaker"\n', encoding="utf-8",
+    )
+    constructed = []
+
+    class Worker(Node):
+        requires = ("tts",)
+
+        async def _serve(self):
+            constructed.append(self)
+
+    await serve_node(Worker, node_id="worker", bindings=config)
+    instance, = constructed
+    assert instance.target == "arm01-work" and instance.action_service
+    assert instance.peers == {"tts": "speaker"}
+    assert instance.skill_bindings == {"speak": "speaker"}
+    assert not hasattr(instance, "definitions")

@@ -45,14 +45,16 @@ async def test_scoped_cancel_rejects_late_controls_and_revision_does_not_execute
         assert (await robot.transport.request("request/health", {}))["executions"] == 2
 
 
-async def test_late_planner_reply_cannot_replace_new_task():
-    async with LocalStack(deferred=True, duration=0.2) as stack:
+async def test_late_planner_reply_cannot_replace_new_task(llm_server):
+    llm_server.gate.clear()
+    async with LocalStack(live_model=True, duration=0.2) as stack:
         system = stack.system
         ack = await system.goal("old goal")
+        await eventually(llm_server.entered.is_set, bool)
         pending = await eventually(system.status, lambda s: s["planner_calls"] == 1)
         assert pending["task_id"] is None and pending["planning_request_id"] == ack.request_id
         new = await system.start(step("move_named_pose", pose="C"))
-        await system.agent.request("request/test/planner/release", {}, control=True)
+        llm_server.gate.set()
         final = await new.wait()
         assert final.task_id == new.id and final.state == "SUCCEEDED"
         overview = await system.status()
@@ -63,25 +65,28 @@ async def test_late_planner_reply_cannot_replace_new_task():
         ] == 1
 
 
-async def test_stop_drops_pending_model_call_so_the_next_goal_is_accepted_at_once():
-    async with LocalStack(deferred=True, duration=0.05) as stack:
+async def test_stop_drops_pending_model_call_so_the_next_goal_is_accepted_at_once(llm_server):
+    llm_server.gate.clear()
+    async with LocalStack(live_model=True, duration=0.05) as stack:
         system = stack.system
         old = await system.goal("old goal")
+        await eventually(llm_server.entered.is_set, bool)
         await eventually(system.status, lambda s: s["planning"] == "WAITING")
         assert (await system.send_text("停止")).accepted
         assert (await system.planning(old.request_id).wait()).state == "STALE"
         assert (await system.allow_actions()).accepted
         # The model call is still unreleased; before, it held the planner until it returned.
         new = await system.goal("put A in B")
-        await system.agent.request("request/test/planner/release", {}, control=True)
+        llm_server.gate.set()
         planned = await new.wait()
         assert planned.state == "DONE" and (await planned.task.wait()).state == "SUCCEEDED"
         assert (await system.status())["planner_calls"] == 2
 
 
-async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
+async def test_cancel_while_holding_keeps_effects_and_rejects_late_work(llm_server):
     """Regression formerly hidden in the multi-scenario interrupt example."""
-    async with LocalStack(deferred=True, duration=0.8) as stack:
+    llm_server.gate.clear()
+    async with LocalStack(live_model=True, duration=0.8) as stack:
         system = stack.system
         robot = system.clients["wrs"]
         pick = step("pick", object="A")
@@ -90,6 +95,7 @@ async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
             robot.context, lambda s: s.data.robot.held_object == "A" and s.active_action is not None
         )
         planning = await system.goal("put A in B")
+        await eventually(llm_server.entered.is_set, bool)
         await eventually(system.status, lambda s: s["planning"] == "WAITING")
         assert (await old.cancel()).accepted
         assert (await old.wait()).state == "CANCELLED"
@@ -108,7 +114,7 @@ async def test_cancel_while_holding_keeps_effects_and_rejects_late_work():
             args={"object": "A", "target": "B"},
         )
         assert (await submit_request(robot, late)).reason == "stale_epoch"
-        await system.agent.request("request/test/planner/release", {}, control=True)
+        llm_server.gate.set()
         assert (await planning.wait()).state == "STALE"
 
         # A is already held: the independent new plan must not pick it again.

@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 
+from wrs_agent.registry import register_node
 from wrs_agent.transport import Transport
 
 
@@ -23,6 +24,7 @@ async def main():
 
     bus.register_handler("request/test/slow", slow)
     bus.register_handler("request/test/slow_status", status, control=True)
+    register_node(bus, "slow-fixture", "custom", env_id=env_id)
     try:
         await asyncio.Event().wait()
     finally:

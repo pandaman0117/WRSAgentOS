@@ -5,12 +5,12 @@ import time
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
-from graphlib import TopologicalSorter
-from itertools import combinations
+from typing import Literal
 
 from wrs_agent.cache import PlanCache
 from wrs_agent.errors import AgentError, error_info, from_exception
-from wrs_agent.nodes.actions import ActionProvider
+from wrs_agent.nodes.action_rpc import ActionProvider
+from wrs_agent.plan_validation import validate_plan
 from wrs_agent.planner import PlanDecision, Planner, PlanRequest, token_counts
 from wrs_agent.schemas import (
     TERMINAL,
@@ -26,69 +26,20 @@ from wrs_agent.schemas import (
     TaskState,
     new_id,
 )
-from wrs_agent.skills import SKILLS, lookup_skills, require_contract, validate_skill
-
-
-def require_ordered_resources(plan):
-    """Steps holding one physical resource must be ordered. A step starts as soon as its own
-    dependencies are met, so an undeclared order is settled by whichever coroutine reaches the
-    node lock first, and a verification can then observe the motion it was meant to verify."""
-    graph = {step.step_id: step.depends_on for step in plan.steps}
-    held = {step.step_id: set(SKILLS[step.skill].spec.resources) for step in plan.steps}
-    ancestors = {}
-    for step_id in TopologicalSorter(graph).static_order():
-        ancestors[step_id] = set(graph[step_id]).union(*(ancestors[d] for d in graph[step_id]))
-    for first, second in combinations(graph, 2):
-        if not held[first] & held[second]:
-            continue  # Distinct resources run in parallel by design, such as speech and motion.
-        if first not in ancestors[second] and second not in ancestors[first]:
-            shared = "、".join(sorted(held[first] & held[second]))
-            raise AgentError(
-                ErrorInfo(
-                    code="unordered_resource_conflict",
-                    # 步骤名来自模型，每个可达 80 字符，而 message 是定长字段：
-                    # 超长会把一条说得清的计划错误变成 internal_error，所以先截断。
-                    message=(
-                        f"步骤 {first} 和 {second} 都要占用 {shared}，却没有声明先后关系。"
-                        "请给其中一个加 depends_on：同一资源同一时刻只能有一个动作。"
-                    )[:240],
-                    stage="preflight",
-                )
-            )
-
-
-def validate_plan(plan, capabilities=None, bindings=None):
-    plan = Plan.model_validate_json(plan.model_dump_json())
-    for step in plan.steps:
-        try:
-            validate_skill(step.skill, step.version, step.args)
-        except AgentError as exc:
-            raise AgentError(
-                from_exception(exc, node_id=(bindings or {}).get(step.skill), stage="preflight")
-            ) from None
-        if capabilities is not None:
-            node = (bindings or {}).get(step.skill)
-            if node is None:
-                raise AgentError("provider_not_found", stage="preflight")
-            cap = capabilities.get(node)
-            if cap is None:
-                raise AgentError("node_unavailable", node_id=node, stage="preflight")
-            require_contract(step.skill, step.version, cap.skills, node_id=node, stage="preflight")
-            if not set(SKILLS[step.skill].spec.required_capabilities).issubset(cap.skills):
-                raise AgentError(
-                    "unsupported_skill_on_current_node", node_id=node, stage="preflight"
-                )
-    # Runs after the loop so an unknown skill is reported before its resource claim is read.
-    require_ordered_resources(plan)
-    return plan
+from wrs_agent.skills import lookup_skills, require_contract, resolve_routes, skill_specs
 
 
 @dataclass(frozen=True)
-class _Task:
+class TaskExecution:
     """One execution definition; JSON also freezes nested arguments and dependencies."""
 
     task_id: str
     plan_json: str
+    bindings: dict = field(default_factory=dict, compare=False)
+    specs: dict = field(default_factory=dict, compare=False)
+    boots: dict = field(default_factory=dict, compare=False)
+    clients: dict = field(default_factory=dict, compare=False, repr=False)
+    robot_controls: dict = field(default_factory=dict, compare=False)
     authorities: dict = field(default_factory=dict, compare=False)
     actions: dict = field(default_factory=dict, compare=False)
     release_epochs: dict = field(default_factory=dict, compare=False)
@@ -96,13 +47,36 @@ class _Task:
     submissions_idle: asyncio.Event = field(default_factory=asyncio.Event, compare=False)
 
     @classmethod
-    def create(cls, plan):
-        task = cls(new_id(), validate_plan(plan).model_dump_json())
+    def create(cls, plan, *, bindings=None, specs=None, boots=None, clients=None, controls=None):
+        task = cls(
+            new_id(), Plan.model_validate_json(plan.model_dump_json()).model_dump_json(),
+            dict(bindings or {}),
+            {n: s.model_copy(deep=True) for n, s in (specs or {}).items()},
+            dict(boots or {}), dict(clients or {}), dict(controls or {}),
+        )
         task.submissions_idle.set()
         return task
 
     def plan(self):
         return Plan.model_validate_json(self.plan_json)
+
+
+@dataclass
+class ExecutionState:
+    state: TaskState | Literal["IDLE"] = "IDLE"
+    reason: str = ""
+    error: ErrorInfo | None = None
+    active_actions: dict[str, str] = field(default_factory=dict)
+    results: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class PlanningState:
+    request_id: str | None = None
+    state: GoalState | Literal["IDLE"] = "IDLE"
+    worker: asyncio.Task | None = None
+    # Display-only measurements; never a timeout or an authorization input.
+    timing: dict = field(default_factory=dict)
 
 
 class Runtime:
@@ -116,11 +90,11 @@ class Runtime:
     ):
         self.nodes, self.bindings, self.planner = nodes, bindings, planner
         self.registry = registry
+        self._offered = {}
+        self._starting = False
+        self._control_serial = 0
         self.task = None
-        self.state, self.reason = "IDLE", ""
-        self.error = None
-        self.active_actions = {}
-        self.results = {}
+        self.execution = ExecutionState()
         self.workers = set()
         self.requests = {}
         self.tasks = {}
@@ -128,11 +102,7 @@ class Runtime:
         self.closed = False
         self.node_locks = {node: asyncio.Lock() for node in nodes}
         self.planner_calls = 0
-        # Spans of the latest decision, for display only; never a timeout or safety input.
-        self.last_planning = {}
-        self.planning = None
-        self.planning_request_id = None
-        self.planning_state = "IDLE"
+        self.planning = PlanningState()
         self.queued = []
         self.cache = PlanCache()
         self.recoveries = 0
@@ -144,25 +114,23 @@ class Runtime:
         return self.task.task_id if self.task else None
 
     def _active(self, task):
-        return self.task is task and not self.closed and self.state == TaskState.RUNNING
+        return self.task is task and not self.closed and self.execution.state == TaskState.RUNNING
 
     def _planning_current(self, request_id):
-        return self.planning_request_id == request_id and not self.closed
+        return self.planning.request_id == request_id and not self.closed
 
     def _activate(self, task, state=TaskState.RUNNING):
         self._save_task()
         self._stale_planning()
-        self.planning_request_id = None
-        self.planning_state = "IDLE"
+        self.planning.request_id = None
+        self.planning.state = "IDLE"
         self.task = task
-        self.state, self.reason, self.results = TaskState(state), "", {}
-        self.error = None
-        self.active_actions.clear()
+        self.execution = ExecutionState(state=TaskState(state))
 
     def _record_error(self, error):
         # Preserve the uncertain action when an independent branch subsequently fails.
-        if self.error is None or self.error.code != "execution_unknown":
-            self.error, self.reason = error, error.message
+        if self.execution.error is None or self.execution.error.code != "execution_unknown":
+            self.execution.error, self.execution.reason = error, error.message
 
     def _capacity(self):
         if len(self.tasks) + len(self.goals) >= 4096:
@@ -186,11 +154,11 @@ class Runtime:
             TaskState.CANCELLED,
         }:
             self.tasks[self.task_id].update(
-                state=self.state,
-                reason=self.reason,
-                error=self.error.model_dump() if self.error else None,
-                steps=dict(self.results),
-                active_actions=dict(self.active_actions),
+                state=self.execution.state,
+                reason=self.execution.reason,
+                error=self.execution.error.model_dump() if self.execution.error else None,
+                steps=dict(self.execution.results),
+                active_actions=dict(self.execution.active_actions),
             )
 
     def task_status(self, task_id):
@@ -205,7 +173,7 @@ class Runtime:
         return deepcopy(self.goals[request_id])
 
     def _stale_planning(self):
-        record = self.goals.get(self.planning_request_id)
+        record = self.goals.get(self.planning.request_id)
         if record and record["state"] == GoalState.WAITING:
             record.update(state=GoalState.STALE, reason="execution_or_control_changed")
 
@@ -215,21 +183,21 @@ class Runtime:
         self.queued.clear()
 
     def snapshot(self):
-        actions = dict(self.active_actions)
+        actions = dict(self.execution.active_actions)
         return {
             "nodes": self.registry.snapshot() if self.registry else {},
             "task_id": self.task_id,
             "revision": 0,  # Deprecated wire field; task IDs identify executions.
-            "state": self.state,
+            "state": self.execution.state,
             "action_id": next(iter(actions.values()), None),
             "active_actions": actions,
-            "steps": dict(self.results),
-            "reason": self.reason,
-            "error": self.error.model_dump() if self.error else None,
-            "planning": self.planning_state,
-            "planning_request_id": self.planning_request_id,
+            "steps": dict(self.execution.results),
+            "reason": self.execution.reason,
+            "error": self.execution.error.model_dump() if self.execution.error else None,
+            "planning": self.planning.state,
+            "planning_request_id": self.planning.request_id,
             "planner_calls": self.planner_calls,
-            "last_planning": dict(self.last_planning),
+            "last_planning": dict(self.planning.timing),
             "queued": len(self.queued),
             "cache_hit": self.cache.last_hit,
             "cache_hits": self.cache.hits,
@@ -257,35 +225,48 @@ class Runtime:
         return result
 
     async def start(self, request: TaskRequest):
+        request = TaskRequest.model_validate_json(request.model_dump_json())
         duplicate = self._duplicate(request.request_id, request.model_dump())
         if duplicate is not None:
             return duplicate
-        if self.closed or self.state not in {
-            "IDLE",
-            TaskState.SUCCEEDED,
-            TaskState.FAILED,
-            TaskState.CANCELLED,
+        if self.closed or self._starting or self.execution.state not in {
+            "IDLE", TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED,
         }:
             raise AgentError("task_busy")
-        task = _Task.create(request.plan)
-        self._remember_task(task)
-        self._activate(task)
-        result = self.snapshot()
-        self.requests[request.request_id] = (request.model_dump(), result)
-        self._spawn(self._execute(task))
-        return result
+        self._starting = True
+        serial = self._control_serial
+        try:
+            features, routes, ambiguous = await self._discover(include_held=True)
+            task = self._task_from(request.plan, features, routes, ambiguous)
+            if self.closed or serial != self._control_serial:
+                raise AgentError("stale_task")
+            self._remember_task(task)
+            self._activate(task)
+            result = self.snapshot()
+            self.requests[request.request_id] = (request.model_dump(), result)
+            self._spawn(self._execute(task))
+            return result
+        finally:
+            self._starting = False
 
     async def enqueue(self, request: TaskRequest):
+        request = TaskRequest.model_validate_json(request.model_dump_json())
         data = {"kind": "enqueue", **request.model_dump()}
         duplicate = self._duplicate(request.request_id, data)
         if duplicate is not None:
             return duplicate
-        plan = validate_plan(request.plan)
+        previous, serial = self.task, self._control_serial
+        features, routes, ambiguous = await self._discover(include_held=True)
+        task = self._task_from(request.plan, features, routes, ambiguous)
+        if previous is not self.task or serial != self._control_serial or self.closed:
+            raise AgentError("stale_task")
+        duplicate = self._duplicate(request.request_id, data)
+        if duplicate is not None:
+            return duplicate
         if len(self.queued) >= 16:
             raise AgentError("task_queue_full")
-        if self.state != TaskState.RUNNING:
+        if self.execution.state != TaskState.RUNNING:
             raise AgentError("enqueue_requires_active_task")
-        task = _Task.create(plan)
         self._remember_task(task)
         self.queued.append(task)
         result = {"accepted": True, "task_id": task.task_id, "queued": len(self.queued)}
@@ -297,9 +278,11 @@ class Runtime:
         duplicate = self._duplicate(request.request_id, data)
         if duplicate is not None:
             return duplicate
-        if self.planner is None or (self.planning and not self.planning.done()):
+        if self._starting or self.planner is None or (
+            self.planning.worker and not self.planning.worker.done()
+        ):
             raise AgentError("planner_unavailable_or_busy")
-        if self.closed or self.state not in {
+        if self.closed or self.execution.state not in {
             "IDLE",
             TaskState.SUCCEEDED,
             TaskState.FAILED,
@@ -317,42 +300,87 @@ class Runtime:
         }
         self._save_task()
         # Planning requests have an ID; a Task exists only after an executable plan is valid.
-        was_running = self.state == TaskState.RUNNING
+        was_running = self.execution.state == TaskState.RUNNING
         if not was_running:
-            self.reason = ""
-        self.planning_request_id = request.request_id
-        self.planning_state = GoalState.WAITING
+            self.execution.reason = ""
+        self.planning.request_id = request.request_id
+        self.planning.state = GoalState.WAITING
         result = {"accepted": True, "request_id": request.request_id, "revision": 0}
         self.requests[request.request_id] = (data, result)
-        self.planning = self._spawn(self._plan(request.goal, request.request_id, was_running))
+        self.planning.worker = self._spawn(
+            self._plan(request.goal, request.request_id, was_running)
+        )
         return result
 
     async def _state(self, node, *, control=False):
         return await node.snapshot(control=control)
 
-    async def _capabilities(self, names=None):
+    async def _features(self, names=None, *, include_held=False, clients=None):
         required = names is not None
-        names = self.nodes if names is None else names
         if self.registry:
             await self.registry.refresh(names)
+        clients = self.nodes if clients is None else clients
+        names = list(clients) if names is None else list(names)
         result = {}
         for name in names:
             try:
                 if self.registry:
-                    if not required and not self.registry.snapshot()[name]["ready"]:
+                    if (
+                        not required and not include_held
+                        and not self.registry.snapshot()[name]["ready"]
+                    ):
                         continue
-                    result[name] = await self.registry.capabilities(name, self.nodes[name])
+                    result[name] = await self.registry.features(
+                        name, clients[name], require_ready=not include_held,
+                    )
                 else:
-                    result[name] = await self.nodes[name].capabilities()
+                    result[name] = await clients[name].features()
             except Exception as exc:
+                if not required:
+                    continue
                 raise AgentError(from_exception(exc, node_id=name, stage="preflight")) from None
         return result
 
-    async def _plan_valid(self, request_id, worlds):
+    async def _discover(self, *, include_held=False):
+        features = await self._features(include_held=include_held)
+        if self.registry:
+            routes, ambiguous = self.registry.routes()
+        else:
+            for name, cap in features.items():
+                self._offered.setdefault(name, set()).update(cap.skills)
+            routes, ambiguous = resolve_routes(self._offered, self.bindings)
+        return features, routes, ambiguous
+
+    def _task_from(self, plan, features, routes, ambiguous=(), *, clients=None):
+        if any(step.skill in ambiguous for step in plan.steps):
+            raise AgentError("skill_provider_ambiguous", stage="preflight")
+        specs = skill_specs(features, routes)
+        steps = []
+        for step in plan.steps:
+            if step.version is None:
+                if step.skill not in specs:
+                    raise AgentError("provider_not_found", stage="preflight")
+                step = step.model_copy(update={"version": specs[step.skill].version})
+            steps.append(step)
+        clients = self.nodes if clients is None else clients
+        participants = {routes.get(step.skill) for step in steps}
+        for name in participants:
+            if name in clients:
+                self.node_locks.setdefault(name, asyncio.Lock())
+        return TaskExecution.create(
+            plan.model_copy(update={"steps": steps}), bindings=routes, specs=specs,
+            boots={name: cap.boot_id for name, cap in features.items()},
+            clients={name: clients[name] for name in participants if name in clients},
+            controls={name: cap.robot_controls for name, cap in features.items()},
+        )
+
+    async def _plan_valid(self, request_id, worlds, clients):
         for name, old in worlds.items():
             if not self._planning_current(request_id):
                 return False
-            current = await self._state(self.nodes[name], control=True)
+            current = await self._state(clients[name], control=True)
+            if self.registry:
+                self.registry.check_instance(name, old.boot_id)
             if not self._planning_current(request_id):
                 return False
             if (
@@ -361,27 +389,28 @@ class Runtime:
                 or current.admission != "OPEN"
                 or current.state_version != old.state_version
             ):
-                self.planning_state = GoalState.STALE
+                self.planning.state = GoalState.STALE
                 return False
         return self._planning_current(request_id)
 
     async def _plan(self, goal, request_id, was_running):
-        worlds = {}
+        worlds, clients = {}, {}
         started = time.perf_counter()
-        self.last_planning = {}
+        self.planning.timing = {}
         try:
-            capabilities = await self._capabilities()
+            features, routes, ambiguous = await self._discover()
+            clients = {name: self.nodes[name] for name in features}
             worlds = {
-                name: await self._state(self.nodes[name], control=True) for name in capabilities
+                name: await self._state(clients[name], control=True) for name in features
             }
             if not self._planning_current(request_id):
                 return
             request = PlanRequest(
                 user_goal=goal,
                 world={n: w.model_dump(exclude={"lease_id"}) for n, w in worlds.items()},
-                skills=[spec.model_dump() for spec in lookup_skills(capabilities, self.bindings)],
+                skills=[spec.model_dump() for spec in lookup_skills(features, routes)],
             )
-            cached = self.cache.lookup(goal, worlds, capabilities, self.bindings)
+            cached = self.cache.lookup(goal, worlds, features, routes)
             called = time.perf_counter()
             if cached is None:
                 self.planner_calls += 1
@@ -392,34 +421,35 @@ class Runtime:
                 usage = {}
             done = time.perf_counter()
             if self._planning_current(request_id):  # A replaced goal's late reply is not shown.
-                self.last_planning = {
+                self.planning.timing = {
                     "total_s": round(done - started, 3),  # Preflight snapshots plus the model.
                     "model_s": round(done - called, 3) if cached is None else None,
                     **usage,
                 }
-            if not await self._plan_valid(request_id, worlds):
+            if not await self._plan_valid(request_id, worlds, clients):
                 return
             if decision.kind != "execute":
-                self.planning_state = GoalState(decision.kind.upper())
+                self.planning.state = GoalState(decision.kind.upper())
                 self.goals[request_id]["reason"] = decision.text
                 if not was_running:
-                    self.reason = decision.text
+                    self.execution.reason = decision.text
                 return
             if was_running:
-                self.planning_state = GoalState.REQUIRES_CONFIRMATION
+                self.planning.state = GoalState.REQUIRES_CONFIRMATION
                 return
-            validated = validate_plan(decision.plan, capabilities, self.bindings)
-            task = _Task.create(validated)
+            validated = validate_plan(decision.plan, features, routes)
+            task = self._task_from(validated, features, routes, ambiguous, clients=clients)
+            validated = task.plan()
             self._remember_task(task)
             self.goals[request_id].update(state=GoalState.DONE, task_id=task.task_id)
             self._activate(task)
-            self.planning_state = GoalState.DONE
+            self.planning.state = GoalState.DONE
             await self._execute(task)
             if self.task is task and not self.closed:
-                if self.state == TaskState.SUCCEEDED:
-                    self.cache.remember(goal, validated, worlds, capabilities, self.bindings)
+                if self.execution.state == TaskState.SUCCEEDED:
+                    self.cache.remember(goal, validated, worlds, features, routes)
                 else:
-                    self.cache.invalidate(goal, self.reason or self.state)
+                    self.cache.invalidate(goal, self.execution.reason or self.execution.state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -427,30 +457,34 @@ class Runtime:
                 return
             # A late provider error after a physical stop is obsolete too.
             try:
-                valid = await self._plan_valid(request_id, worlds)
+                valid = await self._plan_valid(request_id, worlds, clients)
             except Exception:
                 valid = False
             if not self._planning_current(request_id):
                 return
             if not valid:
-                self.planning_state = GoalState.STALE
+                self.planning.state = GoalState.STALE
                 return
-            self.planning_state = GoalState.FAILED
+            self.planning.state = GoalState.FAILED
             failure = from_exception(exc, stage="planning")
             self.goals[request_id].update(reason=failure.message, error=failure.model_dump())
             self.cache.invalidate(goal, failure.code)
             if not was_running:
-                self.state, self.reason = TaskState.FAILED, failure.message
+                self.execution.state, self.execution.reason = TaskState.FAILED, failure.message
 
         finally:
             record = self.goals[request_id]
             if record["state"] == GoalState.WAITING:
                 record.update(
-                    state=self.planning_state
+                    state=self.planning.state
                     if self._planning_current(request_id)
                     else GoalState.STALE,
                     reason=record["reason"]
-                    or (self.reason if self._planning_current(request_id) else "planning_obsolete"),
+                    or (
+                        self.execution.reason
+                        if self._planning_current(request_id)
+                        else "planning_obsolete"
+                    ),
                 )
 
     async def _execute(self, task):
@@ -458,29 +492,41 @@ class Runtime:
             return
         plan = task.plan()
         try:
-            capabilities = await self._capabilities(self._participants(task))
-            validate_plan(plan, capabilities, self.bindings)
-            if self.registry:
-                for step in plan.steps:
-                    self.registry.node_for(step.skill, step.version)
+            features = await self._features(self._participants(task), clients=task.clients)
+            validate_plan(plan, features, task.bindings)
+            for step in plan.steps:
+                cap = features[task.bindings[step.skill]]
+                if cap.specs.get(step.skill) != task.specs[step.skill]:
+                    raise AgentError("skill_catalog_changed", stage="preflight")
+            # All Python validators run at their owners before ANY branch dispatches.
+            # This is effect-free: no leases, resource claims or physical actions.
+            await asyncio.gather(*(
+                task.clients[name].validate(
+                    [step for step in plan.steps if task.bindings[step.skill] == name],
+                    boot_id=task.boots[name],
+                )
+                for name in self._participants(task)
+            ))
             # Capture every participant before ANY branch can dispatch.
             for name in self._participants(task):
                 if not self._active(task):
                     return
                 try:
-                    world = await self._state(self.nodes[name], control=True)
+                    world = await self._state(task.clients[name], control=True)
                 except Exception as exc:
                     raise AgentError(from_exception(exc, node_id=name, stage="preflight")) from None
                 if not self._active(task):
                     return
                 if self.registry:
                     self.registry.check_instance(name, world.boot_id)
+                if world.boot_id != task.boots[name]:
+                    raise AgentError("node_instance_changed", node_id=name, stage="preflight")
                 if world.admission != "OPEN":
                     raise AgentError("node_not_ready", node_id=name, stage="preflight")
                 task.authorities[name] = (world.boot_id, world.control_epoch)
         except Exception as exc:
             if self._active(task):
-                self.state = TaskState.FAILED
+                self.execution.state = TaskState.FAILED
                 self._record_error(from_exception(exc, task_id=task.task_id, stage="preflight"))
                 self._clear_queue("preceding_task_did_not_succeed")
             return
@@ -494,7 +540,7 @@ class Runtime:
                     if outcomes.get(dep) != "SUCCEEDED":
                         outcomes[step.step_id] = "BLOCKED"
                         return
-                node_name = self.bindings[step.skill]
+                node_name = task.bindings[step.skill]
                 async with self.node_locks[node_name]:
                     if not self._active(task):
                         outcomes[step.step_id] = "STALE"
@@ -505,7 +551,7 @@ class Runtime:
             except Exception as exc:
                 failure = from_exception(
                     exc,
-                    node_id=self.bindings.get(step.skill),
+                    node_id=task.bindings.get(step.skill),
                     task_id=task.task_id,
                     stage="preflight",
                 )
@@ -516,12 +562,12 @@ class Runtime:
                     self._record_error(failure)
                 if self._active(task) and outcomes[step.step_id] == "UNKNOWN":
                     try:
-                        await self._fence(self.bindings[step.skill], task)
+                        await self._fence(task.bindings[step.skill], task)
                     except Exception:
                         pass  # The original action remains UNKNOWN; don't lose its ID/cause.
             finally:
                 if self._active(task):
-                    self.results.update(outcomes)
+                    self.execution.results.update(outcomes)
                 done[step.step_id].set()
 
         # At most 12 jobs from the validated contract; no task per progress event.
@@ -539,7 +585,7 @@ class Runtime:
         if not self._active(task):
             return
         values = set(outcomes.values())
-        self.state = (
+        self.execution.state = (
             TaskState.UNKNOWN
             if ActionState.UNKNOWN in values
             else TaskState.FAILED
@@ -548,11 +594,11 @@ class Runtime:
             if values != {ActionState.SUCCEEDED}
             else TaskState.SUCCEEDED
         )
-        if self.state == TaskState.SUCCEEDED:
-            self.reason, self.error = "", None
-        if self.state != TaskState.SUCCEEDED:
+        if self.execution.state == TaskState.SUCCEEDED:
+            self.execution.reason, self.execution.error = "", None
+        if self.execution.state != TaskState.SUCCEEDED:
             self._clear_queue("preceding_task_did_not_succeed")
-        if self.state == TaskState.SUCCEEDED and self.queued and not self.closed:
+        if self.execution.state == TaskState.SUCCEEDED and self.queued and not self.closed:
             queued = self.queued.pop(0)
             self._activate(queued)
             self._spawn(self._execute(queued))
@@ -565,21 +611,23 @@ class Runtime:
             outcome != "FAILED"
             or status.verification != "FAIL"
             or status.reason not in {"localization_failed", "grasp_failed"}
-            or "observe_once" not in SKILLS[step.skill].spec.recovery
+            or "observe_once" not in task.specs[step.skill].recovery
             or self.recovered_task == task.task_id
             or not self._active(task)
             or self.closed
         ):
             return outcome
-        node = self.nodes[node_name]
+        node = task.clients[node_name]
         authority = (original.boot_id, original.control_epoch)
         current = await node.snapshot()
         if not self._recoverable_state(step, current, authority, task):
             return outcome
-        capabilities = await node.capabilities()
+        features = await node.features()
         if (
-            capabilities.skills.get("observe") != SKILLS["observe"].spec.version
-            or capabilities.skills.get(step.skill) != step.version
+            "observe" not in task.specs
+            or task.bindings.get("observe") != node_name
+            or features.specs.get("observe") != task.specs["observe"]
+            or features.skills.get(step.skill) != step.version
         ):
             return outcome
         if not self._active(task):
@@ -587,7 +635,7 @@ class Runtime:
         self.recovered_task = task.task_id
         self.recoveries += 1
         observe = Step(
-            step_id="recovery-" + new_id(), skill="observe", version=SKILLS["observe"].spec.version
+            step_id="recovery-" + new_id(), skill="observe", version=task.specs["observe"].version
         )
         observed, _, _ = await self._attempt(observe, node_name, task, authority)
         if observed != "SUCCEEDED":
@@ -601,7 +649,8 @@ class Runtime:
     def _recoverable_state(self, step, world, authority, task):
         obj = (
             world.data.objects.get(step.args.get("object"))
-            if isinstance(world.data, SceneData) else None
+            if isinstance(world.data, SceneData)
+            else None
         )
         return (
             self._active(task)
@@ -618,11 +667,13 @@ class Runtime:
         )
 
     async def _attempt(self, step, node_name, task, authority=None):
-        node = self.nodes[node_name]
+        node = task.clients[node_name]
         if self.registry:
             await self.registry.refresh([node_name])
-            if self.registry.node_for(step.skill, step.version) != node_name:
-                raise AgentError("node_binding_changed")
+            info = self.registry._ready(node_name)
+            require_contract(
+                step.skill, step.version, info["skills"], node_id=node_name, stage="preflight"
+            )
         world = await node.context()
         if self.registry:
             self.registry.check_instance(node_name, world.boot_id)
@@ -661,7 +712,7 @@ class Runtime:
         task.actions[step.step_id] = (node_name, action.action_id)
         if not self._active(task):
             return "STALE", None, world
-        self.active_actions[step.step_id] = action.action_id
+        self.execution.active_actions[step.step_id] = action.action_id
         try:
             if not self._active(task):
                 return "STALE", None, world
@@ -673,7 +724,7 @@ class Runtime:
                     "revision": 0,
                 }
             )
-            async with asyncio.timeout(SKILLS[step.skill].spec.timeout):
+            async with asyncio.timeout(task.specs[step.skill].timeout):
                 while status is not None and status.state not in TERMINAL:
                     if not self._active(task):
                         return "STALE", None, world
@@ -720,34 +771,31 @@ class Runtime:
                 stage="observe",
             ) from None
         finally:
-            if self.active_actions.get(step.step_id) == action.action_id:
-                self.active_actions.pop(step.step_id)
+            if self.execution.active_actions.get(step.step_id) == action.action_id:
+                self.execution.active_actions.pop(step.step_id)
 
     def _participants(self, task):
         names = set()
         for step in task.plan().steps:
-            name = self.bindings.get(step.skill)
-            if name not in self.nodes:
+            name = task.bindings.get(step.skill)
+            if name not in task.clients:
                 raise AgentError(
                     "provider_not_found", node_id=name, task_id=task.task_id, stage="preflight"
                 )
             names.add(name)
         return names
 
-    async def _robot_controls(self, node_name):
-        if self.registry:
-            return self.registry.definitions[node_name]["type"] == "wrs"
-        return (await self.nodes[node_name].capabilities()).robot_controls
-
-    async def _fence(self, node_name, task=None):
-        node = self.nodes[node_name]
-        robot = await self._robot_controls(node_name)
+    async def _fence(self, node_name, task):
+        node = task.clients[node_name]
+        robot = task.robot_controls[node_name]
         for _ in range(3):
             world = await self._state(node, control=True)
             if task is not None:
                 if self.task is not task:
                     raise AgentError("stale_task")
                 bound = task.authorities.get(node_name)
+                if world.boot_id != task.boots.get(node_name, world.boot_id):
+                    raise AgentError("node_instance_changed", node_id=node_name, stage="control")
                 if bound and world.boot_id != bound[0]:
                     raise AgentError("node_instance_changed", node_id=node_name, stage="control")
                 task.authorities.setdefault(node_name, (world.boot_id, world.control_epoch))
@@ -788,8 +836,8 @@ class Runtime:
             result = self._cancel_receipt(queued.task_id, TaskState.CANCELLED, "STOPPED")
         elif self.task is None or request.task_id != self.task_id:
             raise AgentError("stale_task", task_id=request.task_id, stage="control")
-        elif self.state in {TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED}:
-            result = self._cancel_receipt(request.task_id, self.state, "STOPPED")
+        elif self.execution.state in {TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED}:
+            result = self._cancel_receipt(request.task_id, self.execution.state, "STOPPED")
         else:
             result = self._begin_cancel(self.task)
         self.requests[request.request_id] = (data, result)
@@ -800,12 +848,12 @@ class Runtime:
         return {"task_id": task_id, "state": TaskState(state), "accepted": True, "phase": phase}
 
     def _begin_cancel(self, task):
-        if self.state != TaskState.CANCELLING:
+        if self.execution.state != TaskState.CANCELLING:
             self._stale_planning()
-            self.planning_request_id = None
-            if self.planning_state == GoalState.WAITING:
-                self.planning_state = GoalState.STALE
-            self.state = TaskState.CANCELLING
+            self.planning.request_id = None
+            if self.planning.state == GoalState.WAITING:
+                self.planning.state = GoalState.STALE
+            self.execution.state = TaskState.CANCELLING
             self._clear_queue()
             self._spawn(self._finish_cancel(task))
         return self._cancel_receipt(task.task_id, TaskState.CANCELLING, "STOPPING")
@@ -818,16 +866,21 @@ class Runtime:
             return deepcopy(duplicate)
         if self.closed:
             raise AgentError("runtime_closed", stage="control")
+        self._control_serial += 1
         self._stale_planning()
-        self.planning_request_id = None
-        if self.planning_state == GoalState.WAITING:
-            self.planning_state = GoalState.STALE
+        self.planning.request_id = None
+        if self.planning.state == GoalState.WAITING:
+            self.planning.state = GoalState.STALE
             # WAITING means this call has not started a task, so only the model request is
             # dropped; its reply would be discarded anyway and would keep goal() busy until then.
-            if self.planning and not self.planning.done():
-                self.planning.cancel()
+            if self.planning.worker and not self.planning.worker.done():
+                self.planning.worker.cancel()
         self._clear_queue()
-        if self.task and self.state in {TaskState.RUNNING, TaskState.CANCELLING, TaskState.UNKNOWN}:
+        if self.task and self.execution.state in {
+            TaskState.RUNNING,
+            TaskState.CANCELLING,
+            TaskState.UNKNOWN,
+        }:
             result = self._begin_cancel(self.task)
         else:
             result = {"accepted": True, "phase": "STOPPED", "task_id": None}
@@ -849,13 +902,13 @@ class Runtime:
             async with asyncio.timeout(3):
                 await task.submissions_idle.wait()
             stopped = await asyncio.gather(*(self._wait_stopped(name, task) for name in names))
-            results = dict(self.results)
+            results = dict(self.execution.results)
             async with asyncio.timeout(3):
                 for step_id, (name, action_id) in task.actions.items():
-                    status = await self.nodes[name].status(action_id) if action_id else None
+                    status = await task.clients[name].status(action_id) if action_id else None
                     while status is not None and status.state not in TERMINAL:
                         await asyncio.sleep(0.01)
-                        status = await self.nodes[name].status(action_id)
+                        status = await task.clients[name].status(action_id)
                     if (
                         status is None
                         or status.state == ActionState.UNKNOWN
@@ -872,12 +925,12 @@ class Runtime:
             for name, world, receipt in zip(names, stopped, receipts, strict=True):
                 if (
                     not self.closed
-                    and await self._robot_controls(name)
+                    and task.robot_controls[name]
                     and world.admission == "HELD"
                     and world.control_epoch == receipt.control_epoch
                     and task.release_epochs.get(name) == receipt.control_epoch
                 ):
-                    await self.nodes[name].control(
+                    await task.clients[name].control(
                         "allow_actions",
                         ControlRequest(
                             interrupt_id=new_id(),
@@ -887,20 +940,20 @@ class Runtime:
                         ),
                     )
             if self.task is task:
-                self.state, self.results = TaskState.CANCELLED, results
-                self.reason, self.error = "cancelled_by_request", None
-                self.active_actions.clear()
+                self.execution.state, self.execution.results = TaskState.CANCELLED, results
+                self.execution.reason, self.execution.error = "cancelled_by_request", None
+                self.execution.active_actions.clear()
                 self._save_task()
         except Exception as exc:
             if self.task is task:
-                self.state = TaskState.UNKNOWN
+                self.execution.state = TaskState.UNKNOWN
                 self._record_error(from_exception(exc, task_id=task.task_id, stage="control"))
                 self._save_task()
 
-    async def _wait_stopped(self, node_name, previous=None):
+    async def _wait_stopped(self, node_name, previous):
         async with asyncio.timeout(3):
             while True:
-                world = await self._state(self.nodes[node_name], control=True)
+                world = await self._state(previous.clients[node_name], control=True)
                 bound = previous.authorities.get(node_name) if previous else None
                 if bound and world.boot_id != bound[0]:
                     raise AgentError("node_instance_changed", node_id=node_name, stage="control")
@@ -913,12 +966,13 @@ class Runtime:
     async def close(self):
         if self.closed:
             return
-        if self.task and self.state in {TaskState.RUNNING, TaskState.UNKNOWN}:
+        if self.task and self.execution.state in {TaskState.RUNNING, TaskState.UNKNOWN}:
             self._begin_cancel(self.task)
         self.closed = True
+        self._control_serial += 1
         self._stale_planning()
-        self.planning_request_id = None
+        self.planning.request_id = None
         self._clear_queue()
-        if self.planning and not self.planning.done():
-            self.planning.cancel()
+        if self.planning.worker and not self.planning.worker.done():
+            self.planning.worker.cancel()
         await asyncio.gather(*list(self.workers), return_exceptions=True)

@@ -1,15 +1,13 @@
 import asyncio
-from pathlib import Path
 
 import httpx
 import pytest
 from conftest import control, eventually
+from llm_fixtures import REPLY, chat_reply
 
 from wrs_agent.bindings import load_bindings
-from wrs_agent.nodes.actions import ActionClient
+from wrs_agent.nodes.action_rpc import ActionClient
 from wrs_agent.planner import ModelPlanner
-from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
-from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, Plan, Step, TaskCancelRequest, TaskRequest, new_id
 
@@ -21,8 +19,12 @@ class OfflineNode(ActionClient):
         self.executor = executor
         self.node_id = executor.node_id
 
-    async def capabilities(self):
-        return self.executor.capabilities()
+    async def validate(self, steps, *, boot_id):
+        from wrs_agent.schemas import SkillCheck
+        return self.executor.validate(SkillCheck(boot_id=boot_id, steps=list(steps)))
+
+    async def features(self):
+        return self.executor.features()
 
     async def snapshot(self, *, control=False):
         return self.executor.snapshot()
@@ -40,30 +42,16 @@ class OfflineNode(ActionClient):
         return self.executor.status(action_id)
 
 
-@pytest.mark.parametrize("provider_kind", ["mock", "llm_http_fixture"])
-async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
+async def test_late_model_after_stop_is_rejected(make_env, make_llm):
     env = make_env()
-    provider = MockClient(
-        '{"kind":"execute","plan":{"steps":['
-        '{"step_id":"pick","skill":"pick","args":{"object":"A"}}]}}',
-        deferred=True,
-    )
-    entered, gate = provider.entered, provider.gate
-    if provider_kind == "llm_http_fixture":
-        await provider.aclose()
-        entered, gate = asyncio.Event(), asyncio.Event()
+    entered, gate = asyncio.Event(), asyncio.Event()
 
-        async def respond(request):
-            entered.set()
-            await gate.wait()
-            fixtures = Path(__file__).parents[2] / "examples/models/fixtures"
-            reply = fixtures / "openai_chat_tool_call.json"
-            return httpx.Response(200, content=reply.read_bytes())
+    async def respond(request):
+        entered.set()
+        await gate.wait()
+        return httpx.Response(200, content=REPLY.read_bytes())
 
-        provider = LLMClient(
-            LLMConfig(model="fixture", base_url="https://model.invalid/v1"),
-            transport=httpx.MockTransport(respond),
-        )
+    provider = make_llm(respond)
     _, bindings = load_bindings()
     runtime = Runtime({"wrs": OfflineNode(env)}, bindings, ModelPlanner(provider))
     try:
@@ -73,10 +61,10 @@ async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
         before = env.epoch
         await env.hold(control(env))
         gate.set()
-        await runtime.planning
+        await runtime.planning.worker
         assert env.epoch > before
         assert runtime.task_id is None
-        assert runtime.planning_state == "STALE"
+        assert runtime.planning.state == "STALE"
         assert env.executions == 0 and env.admission == "HELD"
     finally:
         await runtime.close()
@@ -84,38 +72,42 @@ async def test_late_model_after_stop_is_rejected(make_env, provider_kind):
         await provider.aclose()
 
 
-async def test_invalid_model_plan_finishes_failed_without_actions(make_env):
+async def test_invalid_model_plan_finishes_failed_without_actions(make_env, make_llm):
     env = make_env()
-    provider = MockClient(
+    provider = make_llm(
         '{"kind":"execute","plan":{"steps":[{"step_id":"bad","skill":"unregistered"}]}}'
     )
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], ModelPlanner(provider))
     try:
         await runtime.goal(GoalRequest(request_id="bad-plan", goal="put A in B"))
-        await runtime.planning
-        assert runtime.state == "FAILED" and runtime.planning_state == "FAILED"
+        await runtime.planning.worker
+        assert runtime.execution.state == "FAILED" and runtime.planning.state == "FAILED"
         assert env.executions == 0 and not runtime.cache.entries
     finally:
         await runtime.close()
         await env.close()
 
 
-async def test_late_model_error_does_not_overwrite_hold(make_env):
-    def obsolete(request):
-        raise ValueError("obsolete model failure")
+async def test_late_model_error_does_not_overwrite_hold(make_env, make_llm):
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def obsolete(request):
+        entered.set()
+        await gate.wait()
+        return httpx.Response(503)
 
     env = make_env()
-    provider = MockClient(obsolete, deferred=True)
+    provider = make_llm(obsolete)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], ModelPlanner(provider))
     try:
         await runtime.goal(GoalRequest(request_id="late-error", goal="put A in B"))
-        await provider.entered.wait()
+        await entered.wait()
         await env.hold(control(env))
-        provider.gate.set()
-        await runtime.planning
-        assert env.admission == "HELD" and runtime.planning_state == "STALE"
-        assert runtime.task_id is None and runtime.state == "IDLE"
-        assert "obsolete" not in runtime.reason and env.executions == 0
+        gate.set()
+        await runtime.planning.worker
+        assert env.admission == "HELD" and runtime.planning.state == "STALE"
+        assert runtime.task_id is None and runtime.execution.state == "IDLE"
+        assert runtime.execution.reason == "" and env.executions == 0
     finally:
         await runtime.close()
         await env.close()
@@ -126,28 +118,32 @@ def motion(pose="B"):
 
 
 @pytest.mark.parametrize("late_error", [False, True], ids=["reply", "error"])
-async def test_old_planner_cannot_change_new_execution(make_env, late_error):
-    def respond(request):
+async def test_old_planner_cannot_change_new_execution(make_env, make_llm, late_error):
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def respond(request):
+        entered.set()
+        await gate.wait()
         if late_error:
-            raise ValueError("obsolete failure")
-        return (
+            return httpx.Response(503)
+        return httpx.Response(200, json=chat_reply(
             '{"kind":"execute","plan":{"steps":['
             '{"step_id":"old","skill":"pick","args":{"object":"A"}}]}}'
-        )
+        ))
 
     env = make_env(duration=0.1)
-    provider = MockClient(respond, deferred=True)
+    provider = make_llm(respond)
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], ModelPlanner(provider))
     try:
         ack = await runtime.goal(GoalRequest(request_id="old-goal", goal="pick A"))
-        await provider.entered.wait()
+        await entered.wait()
         assert ack["request_id"] == "old-goal" and runtime.task_id is None
         newer = await runtime.start(TaskRequest(request_id="new-execution", plan=motion()))
-        provider.gate.set()
-        await runtime.planning
+        gate.set()
+        await runtime.planning.worker
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
         assert runtime.task_id == newer["task_id"]
-        assert runtime.planning_state == "IDLE" and runtime.reason == ""
+        assert runtime.planning.state == "IDLE" and runtime.execution.reason == ""
         assert env.executions == 1 and env.world.pose == "B"
         assert all(r[0]["task_revision"] == 0 for r in env.records.values())
     finally:
@@ -216,19 +212,14 @@ async def test_cancel_then_start_keeps_ids_and_rejects_late_controls(make_env):
 
 @pytest.mark.parametrize("replacement_skill", ["move_named_pose", "speak"])
 async def test_unconfirmed_stop_cannot_start_new_task(make_env, tmp_path, replacement_skill):
-    from wrs_agent.nodes.tts import make_mock_tts
+    from wrs_agent.nodes.tts.backend import make_mock_tts
 
     env = make_env(duration=0.1, fault="stop_unknown")
     tts = make_mock_tts(tmp_path / "tts.sqlite3", duration=0.1)
     runtime = Runtime({"wrs": OfflineNode(env), "tts": OfflineNode(tts)}, load_bindings()[1])
     try:
         a = await runtime.start(TaskRequest(request_id="first", plan=motion()))
-        await eventually(
-            env.snapshot,
-            lambda w: (
-                w.active_action is not None and env.status(w.active_action).state == "RUNNING"
-            ),
-        )
+        await asyncio.wait_for(env.world.started.wait(), 1)
         await runtime.cancel(TaskCancelRequest(request_id="hold", task_id=a["task_id"]))
         replacement = (
             motion("C")
@@ -276,7 +267,7 @@ async def test_late_action_failure_does_not_fence_or_overwrite_new_task(make_env
         epoch = env.epoch
         release.set()
         await eventually(runtime.snapshot, lambda s: s["state"] == "SUCCEEDED")
-        assert runtime.task_id == b["task_id"] and runtime.reason == ""
+        assert runtime.task_id == b["task_id"] and runtime.execution.reason == ""
         assert env.epoch == epoch and env.world.pose == "C"
     finally:
         release.set()

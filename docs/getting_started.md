@@ -74,29 +74,29 @@ print(receipt.accepted)
 print(task.wait().state)
 ```
 
-UI 可以直接提供文字；ASR 后端识别完成后也调用同一个入口。Voice 节点识别明确停止后走本地控制服务，不等待云模型。另有 [只停播报](../examples/voice/02_text_stop_speech.py)、[查询进度](../examples/voice/03_text_query.py)、[文字目标](../examples/voice/04_text_goal.py)，每种情况一份文件。
+UI 可以直接提供文字；ASR 后端识别完成后也调用同一个入口。Voice 节点识别明确停止后走本地控制服务，不等待云模型。另有 [只停播报](../examples/voice/02_text_stop_speech.py)、[查询进度](../examples/voice/03_text_query.py)，每种情况一份文件。
 
 当前没有真实麦克风识别，VAD 和部分识别也不代表已确认停止。接入约定见 [VOICE_INPUT.md](VOICE_INPUT.md)。
 
 ## 让 Planner 给出步骤
 
-[05_goal.py](../examples/tasks/05_goal.py) 展示两次等待：
+连接到配置了在线模型的 Agent 后，`goal()` 分别等待规划和执行；例如连接 [在线语音服务](../examples/voice/07_start_llm_voice.py) 后：
 
 ```python
-planned = system.goal("home").wait()
+planned = system.goal("移动到命名姿态 B").wait()
 if planned.task is not None:
     print(planned.task.wait().state)
 else:
     print(planned.state, planned.reason)
 ```
 
-第一次等规划结果，第二次等执行结果。此例使用确定的 home 模板；Planner 也可能回答或要求澄清。在线模型见 [模型示例](../examples/README.md#模型)。缓存只缓存计划结构，不保存执行授权，完整行为由测试覆盖。
+第一次等规划结果，第二次等执行结果；Planner 也可能回答或要求澄清。单文件运行见 [在线模型示例](../examples/README.md#模型)，需要显式配置模型服务。缓存只缓存计划结构，不保存执行授权，完整行为由测试覆盖。
 
 ## 接入自己的节点
 
 先看 [独立连接](../examples/README.md#connect)：服务保持运行，客户端随时连接、退出。`connect()` 只拥有连接，退出不会关闭远端节点。
 
-再看 [节点与技能](../examples/README.md#nodes)：合同在 `greet_skill.py`，执行器在 `01_start_speaker.py`，调度器在 `02_start_agent.py`，调用与取消各有文件。地址、节点名和绑定直接写在代码或 TOML 中，没有命令行模式切换。
+再看 [节点与技能](../examples/README.md#nodes)：合同在 `greet_skill.py`，执行器在 `01_start_speaker.py`，调度器在 `02_start_agent.py`，调用与取消各有文件。地址和节点写在代码或 TOML 中，技能从节点发现；Agent 和客户端无需导入技能实现。
 
 WRS 同样使用动作接口：[虚拟运动](../examples/wrs/01_move.py)、[取消](../examples/wrs/02_cancel.py)、[取消后接收新动作](../examples/wrs/03_new_action_after_cancel.py)。另有 [方向移动](../examples/wrs/04_move_relative.py) 和 [独立节点及 viewer](../examples/README.md#wrs-虚拟机器人)。它使用真实 UR7E 模型计算 IK/FK，不代表已经接通硬件或实现抓放。
 

@@ -1,4 +1,4 @@
-# launch() starts enabled nodes; skills bind to explicit node IDs.
+# launch() starts enabled nodes; skill routes are discovered from these nodes.
 # Python still owns process supervision, endpoint selection, and credentials.
 [nodes.wrs]
 type = "wrs"
@@ -30,13 +30,3 @@ type = "vision"
 suffix = "-vision"
 actions = false
 enabled = false
-
-[skills]
-observe = "wrs"
-move_named_pose = "wrs"
-move_relative = "wrs"
-set_gripper = "wrs"
-pick = "wrs"
-place = "wrs"
-verify = "wrs"
-speak = "tts"

@@ -72,8 +72,9 @@ async def test_parallel_nodes_dependency_and_resources():
     assert all(p.poll() is not None for p in stack.processes)
 
 
-async def test_hung_model_direct_voice_cancel_and_stop():
-    async with LocalStack(duration=3, deferred=True) as stack:
+async def test_hung_model_direct_voice_cancel_and_stop(llm_server):
+    llm_server.gate.clear()
+    async with LocalStack(duration=3, live_model=True) as stack:
         bus, voice = stack.system.clients["wrs"].transport, stack.system._transports["voice"]
         wrs = stack.system.clients["wrs"]
         tts = stack.system.clients["tts"]
@@ -102,6 +103,7 @@ async def test_hung_model_direct_voice_cancel_and_stop():
         await eventually(
             lambda: bus.request("request/task/status", {}), lambda s: s["planner_calls"] == 1
         )
+        await eventually(llm_server.entered.is_set, bool)
         for kind in ("query", "vad", "ack"):
             result = await voice.request(
                 "request/voice/event", {"event_id": new_id(), "kind": kind}
@@ -137,7 +139,7 @@ async def test_hung_model_direct_voice_cancel_and_stop():
             args={"object": "A"},
         )
         assert (await submit_request(wrs, late)).reason == "stale_epoch"
-        await bus.request("request/test/planner/release", {}, control=True)
+        llm_server.gate.set()
         await eventually(
             lambda: bus.request("request/task/status", {}), lambda s: s["planning"] == "STALE"
         )
@@ -202,7 +204,7 @@ async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner()
                 "tests/fixtures/slow_query.py", stack.endpoint, stack.site, stack.env_id
             ),
         )
-        await stack._wait_ready(bus, "request/test/slow_status")
+        await stack._wait_ready("slow-fixture")
         waiting = asyncio.create_task(bus.request("request/test/slow", {}, timeout=10))
         await eventually(
             lambda: bus.request("request/test/slow_status", {}, control=True),
@@ -241,7 +243,7 @@ async def test_query_reconnect_without_resubmitting_actions():
         replacement = await asyncio.to_thread(stack.start_router)
         stack.processes.remove(replacement)
         stack.processes.insert(0, replacement)
-        await stack._wait_ready(stack.system.clients["wrs"].transport, "request/capabilities")
+        await stack._wait_ready("wrs")
         assert (await client.status(action.action_id)).state == "SUCCEEDED"
         assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
             "executions"

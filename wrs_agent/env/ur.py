@@ -6,15 +6,14 @@ was started with hardware allowed.
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from functools import partial
 
-from wrs_agent.actions import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.env import ur_rtde
 from wrs_agent.env.wrs import ROBOT_SKILLS, UNSUPPORTED, advance_virtual, open_model
 from wrs_agent.errors import error_info
+from wrs_agent.executor import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.schemas import ModeReceipt, ModeRequest
-from wrs_agent.skills import SKILLS
+from wrs_agent.skills.robot import SKILLS
 
 MONITOR_PERIOD = 0.2  # Idle readback for display; never used as a motion authorization.
 
@@ -134,12 +133,9 @@ async def make_ur_environment(
     executor = ActionExecutor(
         journal_path,
         state=state,
-        skills={
-            name: replace(SKILLS[name], handler=partial(advance, name)) for name in ROBOT_SKILLS
-        },
-        duration=0,
+        skills=[SKILLS[name].bind(partial(advance, name)) for name in ROBOT_SKILLS],
         backend="ur_rtde",
-        capabilities_extra={
+        features_extra={
             "hardware": True,
             "verification": "rtde_joint_readback",
             "stop_scope": "ur_servo_stop_then_observed_rest",

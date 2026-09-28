@@ -1,4 +1,4 @@
-"""终端一：启动常驻 Mock TTS，自动准备本机示例共享口令。"""
+"""Offline Mock TTS service fixture for connection and credential regressions."""
 
 import asyncio
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from examples._session import use_local_token
 from wrs_agent import System
 
-BINDINGS = Path(__file__).resolve().parents[2] / "configs/tts.toml"
+BINDINGS = Path(__file__).resolve().parents[3] / "configs/tts.toml"
 
 
 async def main():
@@ -17,7 +17,7 @@ async def main():
 
 if __name__ == "__main__":
     # 启动前准备共享口令，供 02_client 连接本服务。
-    use_local_token("connect", create=True)
+    use_local_token("tts", create=True)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

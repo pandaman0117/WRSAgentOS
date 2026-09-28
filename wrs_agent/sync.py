@@ -160,19 +160,23 @@ class Session:
     def allow_actions(self, node=None):
         return self._call(self._system.allow_actions, node)
 
+    def set_robot_mode(self, mode, node=None):
+        return self._call(self._system.set_robot_mode, mode, node)
+
     def replay(self, kind):
         return self._call(self._system.replay, kind)
 
 
 def launch(
     *, backend="mock", duration=0.4, bindings=None, scene=None, port=0, site="local", env_id=None,
-    tts_backend="mock", tts_python=None, tts_prepared_texts=(),
+    live_model=False, tts_backend="mock", tts_python=None, tts_prepared_texts=(),
     asr_backend="mock", asr_python=None, asr_script=(), asr_vocabulary=(),
 ):
     """Start configured local nodes; close owned nodes and router on exit."""
     return _session(
         System.launch(
             backend=backend,
+            live_model=live_model,
             scene=scene,
             tts_backend=tts_backend,
             tts_python=tts_python,
@@ -190,9 +194,15 @@ def launch(
     )
 
 
-def connect(endpoint="tcp/127.0.0.1:7447", *, site="local", env_id="arm01", bindings=None):
-    """Connect to running nodes with WRS_AGENT_TOKEN; exit only closes this connection."""
-    return _session(System.connect(endpoint, site=site, env_id=env_id, bindings=bindings))
+def connect(
+    endpoint="tcp/127.0.0.1:7447", *, site="local", env_id="arm01",
+    skill_bindings=None, peers=None, bindings=None,
+):
+    """Discover running nodes with WRS_AGENT_TOKEN; exit only closes this connection."""
+    return _session(System.connect(
+        endpoint, site=site, env_id=env_id, skill_bindings=skill_bindings,
+        peers=peers, bindings=bindings,
+    ))
 
 
 @contextmanager

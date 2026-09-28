@@ -125,7 +125,7 @@ Voice/06 分别打印识别推理耗时和指令处理耗时；总延迟还包�
 
 rtf 越过 1 之后流式播放才第一次成立，上一节"流式救不了"的结论不再适用。
 
-上表是非流式基准。`wrs_agent/speech/tts.py` 已改用 `FasterQwen3TTS`，并在构造时调用 `warmup()` 完成 CUDA graph 捕获（加载加捕获共 11.03 s，仍在节点就绪之前，不进入首个动作）。
+上表是非流式基准。`wrs_agent/nodes/tts/qwen.py` 已改用 `FasterQwen3TTS`，并在构造时调用 `warmup()` 完成 CUDA graph 捕获（加载加捕获共 11.03 s，仍在节点就绪之前，不进入首个动作）。
 
 **停止机制必须改。** 实测在 CUDA graph 重放下，talker 的 `forward_pre_hook` 触发 0 次，抛异常也中断不了生成，旧的逐 forward 停止检查完全失效。现改用流式接口 `generate_custom_voice_streaming(chunk_size=8)`，在每个 chunk 边界检查停止标志：8 步约合 0.67 s 音频、每 chunk 约 330 ms 墙钟。实测在合成中途置位停止标志后约 20 ms 返回，且中止生成器后模型仍能正常服务后续请求；旧实现则必须等整句合成结束，同一句话要等 25 s。`render` 因此返回分块，由 `play_audio` 拼接。
 

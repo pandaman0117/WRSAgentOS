@@ -102,7 +102,8 @@ UI 展示 disposition、accepted、phase、task_id 和 error.code。UNKNOWN 展�
 
 ## Qwen 中文输入适配
 
-已增加可选本地 `wrs_agent/speech/asr.py` 和完整 WRS 语音例子；麦克风及推理在输入客户端，Voice 仍消费已识别的文本。控制与固定方向命令的调用链、安装和局限见 [Qwen 语音指南](QWEN_SPEECH.md)。默认测试不会录音、下载模型或播放音频。
+可选本地识别实现归 `wrs_agent/nodes/asr/`：node.py 管按键会话，capture.py 管采集，qwen.py 管识别。
+独立 AsrNode 或显式语音客户端都可使用该后端；Voice 仍只消费已识别的文本。控制与固定方向命令的调用链、安装和局限见 [Qwen 语音指南](QWEN_SPEECH.md)。默认测试不会录音、下载模型或播放音频。
 
 ## 按住说话的 ASR 节点
 

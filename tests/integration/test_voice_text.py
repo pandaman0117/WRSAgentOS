@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from conftest import eventually
+from llm_fixtures import chat_reply
 
 from wrs_agent import AgentError, System, launch, step
 from wrs_agent.processes import LocalStack
@@ -37,8 +38,8 @@ async def test_text_controls_scope_idempotence_and_new_task():
             await system.send_text("home", input_id="utterance")
 
 
-async def test_final_text_goal_receipt_can_be_reconnected_and_deduplicated():
-    async with LocalStack(duration=0.02) as stack:
+async def test_final_text_goal_receipt_can_be_reconnected_and_deduplicated(llm_server):
+    async with LocalStack(live_model=True, duration=0.02) as stack:
         system = stack.system
         receipt = await system.send_text("put A in B", input_id="recognized-goal")
         assert receipt.accepted and receipt.disposition == "goal"
@@ -49,6 +50,7 @@ async def test_final_text_goal_receipt_can_be_reconnected_and_deduplicated():
             planned = await second.planning(receipt.request_id).wait()
             assert (await planned.task.wait()).state == "SUCCEEDED"
         assert (await system.status())["planner_calls"] == 1
+        llm_server.response = chat_reply('{"kind":"clarify","text":"Which object?"}')
         unknown = await system.send_text("some unrecognized speech")
         assert (await system.planning(unknown.request_id).wait()).state == "CLARIFY"
         assert (await system.clients["wrs"].transport.request("request/health", {}))[
@@ -56,15 +58,17 @@ async def test_final_text_goal_receipt_can_be_reconnected_and_deduplicated():
         ] == 4
 
 
-async def test_text_stop_invalidates_hung_planning_and_cannot_stop_later_task():
-    async with LocalStack(deferred=True, duration=0.1) as stack:
+async def test_text_stop_invalidates_hung_planning_and_cannot_stop_later_task(llm_server):
+    llm_server.gate.clear()
+    async with LocalStack(live_model=True, duration=0.1) as stack:
         system = stack.system
         receipt = await system.send_text("put A in B")
+        await eventually(llm_server.entered.is_set, bool)
         await eventually(system.status, lambda s: s["planning"] == "WAITING")
         stop = await system.send_text("停止", input_id="stop-planning")
         assert stop.accepted
         assert (await system.planning(receipt.request_id).wait()).state == "STALE"
-        await system.agent.request("request/test/planner/release", {}, control=True)
+        llm_server.gate.set()
         assert (await system.allow_actions()).accepted
         task = await system.start(step("move_named_pose", pose="B"))
         assert await system.send_text("停止", input_id="stop-planning") == stop
@@ -112,8 +116,8 @@ async def test_text_stop_fences_robot_even_when_agent_is_offline():
         assert (await system.snapshot()).stop_confirmed
 
 
-def test_sync_text_input_uses_same_receipt_and_planning_handles():
-    with launch(duration=0.02) as system:
+def test_sync_text_input_uses_same_receipt_and_planning_handles(llm_server):
+    with launch(live_model=True, duration=0.02) as system:
         receipt = system.send_text("put A in B")
         plan = system.planning(receipt.request_id).wait()
         assert plan.task.wait().state == "SUCCEEDED"

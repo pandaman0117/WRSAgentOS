@@ -125,7 +125,7 @@ async def test_unknown_stop_never_allow_actionss(make_env):
     try:
         req = action(env)
         await env.submit(req)
-        await eventually(lambda: env.status(req.action_id), lambda s: s.state == "RUNNING")
+        await asyncio.wait_for(env.world.started.wait(), 1)
         await env.hold(control(env))
         await eventually(lambda: env.status(req.action_id), lambda s: s.state == "UNKNOWN")
         assert not (await env.allow_actions(control(env, state_version=env.world.version))).accepted
@@ -192,4 +192,33 @@ async def test_progress_events_contain_state_without_issuing_permission(make_env
         assert env.leases == grants
         assert env.status(request.action_id).state == "SUCCEEDED"
     finally:
+        await env.close()
+
+
+async def test_stop_before_backend_entry_does_not_run_a_handler_or_invent_unknown(make_env):
+    env = make_env(fault="stop_unknown")
+    entered, release = asyncio.Event(), asyncio.Event()
+    save = env.journal.save
+
+    async def paused_save(request, status):
+        if status.state == "RUNNING":
+            entered.set()
+            await release.wait()
+        await save(request, status)
+
+    env.journal.save = paused_save
+    try:
+        request = action(env)
+        await env.submit(request)
+        await asyncio.wait_for(entered.wait(), 1)
+        assert not env.world.started.is_set()
+        receipt = await env.hold(control(env))
+        assert receipt.phase == "STOPPING"
+        release.set()
+        await env.runner
+        assert not env.world.started.is_set()
+        assert env.status(request.action_id).state == "CANCELLED"
+        assert env.stop_confirmed and env.world.held is None
+    finally:
+        release.set()
         await env.close()

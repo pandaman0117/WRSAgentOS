@@ -57,6 +57,19 @@ class Boundary(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True, allow_inf_nan=False)
 
 
+class SkillSpec(Boundary):
+    name: Name
+    version: SkillVersion = 1
+    description: str
+    instructions: str = Field(default="", max_length=8192)
+    parameters: dict
+    resources: list[str]
+    preconditions: list[str]
+    verification: str
+    timeout: float = Field(default=10.0, gt=0)
+    recovery: list[str] = Field(default_factory=list)
+
+
 class ErrorInfo(Boundary):
     """Stable machine code plus safe context; never a serialized exception/input dump."""
 
@@ -275,10 +288,13 @@ class ActionContext(NodeSnapshot):
     lease_id: Name
 
 
-class CapabilitySnapshot(Boundary):
+class FeatureSnapshot(Boundary):
     backend: Name = "mock"
     resources: list[Name] = Field(default_factory=list)
     skills: dict[Name, SkillVersion] = Field(max_length=64)
+    specs: dict[Name, SkillSpec] = Field(default_factory=dict, max_length=64)
+    boot_id: Name | None = None
+    skill_revision: Counter = 0
     robot_controls: bool = True
     hardware: bool = False  # Can drive a real device; SceneData.facts says whether it does now.
     controlled_stop: bool = True
@@ -290,10 +306,14 @@ class CapabilitySnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "vision"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "vision", "custom"]
+    target: Name | None = None
+    actions: bool = False
+    robot_controls: bool = False
     boot_id: Name | None = None
-    capabilities: list[Name] = Field(default_factory=list, max_length=64)
+    features: list[Name] = Field(default_factory=list, max_length=64)
     skills: dict[Name, SkillVersion] = Field(default_factory=dict, max_length=64)
+    skill_revision: Counter = 0
     resources: list[Name] = Field(default_factory=list, max_length=32)
     ready: bool = False
     health: Literal["ready", "held", "unknown", "offline", "stale", "unsupported"] = "offline"
@@ -303,7 +323,7 @@ class NodeInfo(Boundary):
 class Step(Boundary):
     step_id: Name
     skill: Name
-    version: SkillVersion = 1
+    version: SkillVersion | None = 1
     args: Annotated[dict[Name, Scalar], Field(max_length=8)] = Field(default_factory=dict)
     category: Literal["interactive", "background"] = "interactive"
     depends_on: Annotated[list[Name], Field(max_length=12)] = Field(default_factory=list)
@@ -321,6 +341,17 @@ class Plan(Boundary):
             raise ValueError("missing_dependency")
         tuple(TopologicalSorter({s.step_id: s.depends_on for s in self.steps}).static_order())
         return self
+
+
+class SkillCheck(Boundary):
+    """Pure argument preflight; never an action or an execution grant."""
+    boot_id: Name
+    steps: list[Step] = Field(min_length=1, max_length=12)
+
+
+class SkillCheckResult(Boundary):
+    boot_id: Name
+    count: int = Field(ge=1, le=12)
 
 
 class TaskRequest(Boundary):

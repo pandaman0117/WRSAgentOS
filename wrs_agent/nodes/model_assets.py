@@ -6,7 +6,8 @@ import os
 from importlib.resources import files
 from pathlib import Path
 
-DEFAULT_MODEL_ROOT = Path(__file__).resolve().parents[2] / ".local/models"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MODEL_ROOT = ROOT / ".local/models"
 
 
 def model_root(root=None):
@@ -16,7 +17,12 @@ def model_root(root=None):
 
 
 def manifest():
-    return json.loads(files(__package__).joinpath("assets.json").read_text(encoding="utf-8"))
+    return {
+        kind: json.loads(
+            files(f"wrs_agent.nodes.{kind}").joinpath("assets.json").read_text("utf-8")
+        )
+        for kind in ("asr", "tts")
+    }
 
 
 def model_directory(kind, root=None):
@@ -26,7 +32,8 @@ def model_directory(kind, root=None):
     receipt_path = directory / ".verified.json"
     if not receipt_path.is_file():
         raise FileNotFoundError(
-            "Speech model missing or unverified at " + str(directory)
+            "Speech model missing or unverified at "
+            + str(directory)
             + "; run scripts/download_speech_models.py to download/verify it."
         )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -36,7 +43,8 @@ def model_directory(kind, root=None):
         path = directory / item["path"]
         stat = path.stat()
         if stat.st_size != item["size"] or receipt.get("files", {}).get(item["path"]) != [
-            stat.st_size, stat.st_mtime_ns
+            stat.st_size,
+            stat.st_mtime_ns,
         ]:
             raise ValueError("speech_model_changed: rerun download_speech_models.py")
     return directory.resolve()

@@ -8,9 +8,9 @@ from examples.voice.commands import normalize
 from wrs_agent import AgentError, connect
 from wrs_agent.env.viewer import viewer_hub
 from wrs_agent.env.wrs import load_wrs, sync_scene_objects
+from wrs_agent.nodes.asr.capture import CAPTURE_SECONDS
 from wrs_agent.policy import text_intent
 from wrs_agent.schemas import TERMINAL, TextInput, new_id
-from wrs_agent.speech.asr import CAPTURE_SECONDS
 
 CONFIG = Path(__file__).with_name("wrs_bindings.toml")
 VIEWER_PORT = 8001

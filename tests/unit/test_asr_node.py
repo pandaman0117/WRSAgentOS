@@ -1,9 +1,11 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from conftest import eventually
 
-from wrs_agent.nodes.asr import make_mock_capture, register_asr
+from wrs_agent.nodes.asr import AsrNode
+from wrs_agent.nodes.asr.capture import make_mock_capture
 from wrs_agent.schemas import AsrResult, TextReceipt
 
 
@@ -33,10 +35,24 @@ class Voice:
         ).model_dump()
 
 
-def node(script=(), *, fail=False, max_seconds=4.0):
+async def node(script=(), *, fail=False, max_seconds=4.0):
     bus, voice = Bus(), Voice(fail=fail)
-    close = register_asr(bus, voice, make_mock_capture(script, max_seconds=max_seconds))
-    return bus.handlers, voice, close
+
+    class FixtureNode(AsrNode):
+        async def create_capture(self):
+            return make_mock_capture(script, max_seconds=max_seconds)
+
+        def connect(self, node_id):
+            return voice
+
+    async def wait_for(node_id=None, **kwargs):
+        return node_id or "voice"
+
+    instance = FixtureNode(peers={"voice": "voice"})
+    instance.discover = lambda: SimpleNamespace(wait_for=wait_for)
+    instance.transport = bus
+    await instance.setup()
+    return bus.handlers, voice, instance.teardown
 
 
 async def settled(handlers, press_id):
@@ -58,7 +74,7 @@ async def press(handlers, press_id, *, hold=0):
 
 
 async def test_goal_transcript_returns_to_the_caller_without_being_submitted():
-    handlers, voice, close = node(["机器人，移动到 B"])
+    handlers, voice, close = await node(["机器人，移动到 B"])
     try:
         result = await press(handlers, "p1")
         assert result.text == "机器人，移动到 B" and not result.reason
@@ -69,7 +85,7 @@ async def test_goal_transcript_returns_to_the_caller_without_being_submitted():
 
 
 async def test_stop_is_routed_here_and_does_not_wait_for_the_caller():
-    handlers, voice, close = node(["停止"])
+    handlers, voice, close = await node(["停止"])
     try:
         result = await press(handlers, "p1")
         suffix, payload, control = voice.calls[0]
@@ -82,7 +98,7 @@ async def test_stop_is_routed_here_and_does_not_wait_for_the_caller():
 
 
 async def test_repeated_begin_and_end_stay_idempotent():
-    handlers, voice, close = node(["停止"])
+    handlers, voice, close = await node(["停止"])
     try:
         first = await handlers["request/asr/begin"]({"press_id": "p1"})
         assert await handlers["request/asr/begin"]({"press_id": "p1"}) == first
@@ -99,7 +115,7 @@ async def test_repeated_begin_and_end_stay_idempotent():
 
 
 async def test_one_microphone_refuses_a_second_concurrent_press():
-    handlers, voice, close = node(["first", "second"])
+    handlers, voice, close = await node(["first", "second"])
     try:
         await handlers["request/asr/begin"]({"press_id": "p1"})
         with pytest.raises(ValueError, match="asr_busy"):
@@ -113,7 +129,7 @@ async def test_one_microphone_refuses_a_second_concurrent_press():
 
 
 async def test_overlong_press_is_discarded_whole_and_never_reaches_voice():
-    handlers, voice, close = node(["机器人，移动到 B"], max_seconds=0.05)
+    handlers, voice, close = await node(["机器人，移动到 B"], max_seconds=0.05)
     try:
         result = await press(handlers, "p1", hold=0.2)
         assert result.text == "" and result.reason == "no_complete_utterance"
@@ -123,7 +139,7 @@ async def test_overlong_press_is_discarded_whole_and_never_reaches_voice():
 
 
 async def test_lost_release_frees_the_microphone_without_sending_late_audio():
-    handlers, voice, close = node(["stale", "停止"], max_seconds=0.05)
+    handlers, voice, close = await node(["stale", "停止"], max_seconds=0.05)
     try:
         await handlers["request/asr/begin"]({"press_id": "p1"})
         await asyncio.sleep(0.2)  # Capture bounds itself; the release never arrives.
@@ -137,7 +153,7 @@ async def test_lost_release_frees_the_microphone_without_sending_late_audio():
 
 
 async def test_unreachable_voice_keeps_the_stop_transcript_for_the_caller():
-    handlers, voice, close = node(["停止"], fail=True)
+    handlers, voice, close = await node(["停止"], fail=True)
     try:
         result = await press(handlers, "p1")
         # Never reported as stopped; the caller still has the text and can retry the stop.
@@ -147,8 +163,15 @@ async def test_unreachable_voice_keeps_the_stop_transcript_for_the_caller():
         await close()
 
 
-async def test_close_ends_capture_without_dispatching_it():
-    handlers, voice, close = node(["停止"])
-    await handlers["request/asr/begin"]({"press_id": "p1"})
-    await close()
-    assert not voice.calls
+async def test_asr_instances_do_not_share_press_ids_or_transcripts():
+    first, voice_a, close_a = await node(["first"])
+    second, voice_b, close_b = await node(["second"])
+    try:
+        a, b = await asyncio.gather(press(first, "same-id"), press(second, "same-id"))
+        assert (a.text, b.text) == ("first", "second")
+        assert not voice_a.calls and not voice_b.calls
+        await close_a()
+        assert (await second["request/asr/result"]({"press_id": "same-id"}))["text"] == "second"
+    finally:
+        await close_a()
+        await close_b()

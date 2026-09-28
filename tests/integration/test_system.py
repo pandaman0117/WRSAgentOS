@@ -6,7 +6,7 @@ from conftest import submit_request
 from tests.conftest import eventually
 from wrs_agent import System, step
 from wrs_agent.bindings import DEFAULT
-from wrs_agent.nodes.actions import ActionClient
+from wrs_agent.nodes.action_rpc import ActionClient
 from wrs_agent.processes import LocalStack
 from wrs_agent.schemas import ControlRequest, new_id
 
@@ -17,7 +17,7 @@ async def test_system_task_parallel_query_and_scoped_voice_controls():
     async with System.launch(duration=2) as system:
         nodes = await system.nodes()
         assert {n for n, s in nodes.items() if s["ready"]} == {"wrs", "tts", "agent", "voice"}
-        assert nodes["vision"]["health"] == "unsupported" and nodes["vision"]["boot_id"] is None
+        assert "vision" not in nodes  # Disabled launch entries are not discovered nodes.
         move = step("move_named_pose", pose="B")
         speak = step("speak", text="working")
         task = await system.start(move, speak)
@@ -48,7 +48,7 @@ async def test_action_handle_dedup_status_and_tts_without_robot_controls():
         tts = system.clients["tts"]
         assert type(tts) is type(system.clients["wrs"]) is ActionClient
         assert not hasattr(tts, "hold")
-        assert not (await tts.capabilities()).robot_controls
+        assert not (await tts.features()).robot_controls
         context = await tts.context()
         assert context.data.kind == "speech"
         assert set(context.data.model_dump()) == {"kind", "completed", "last_text"}
@@ -153,7 +153,7 @@ async def test_public_action_recovers_lost_receipt_and_repeated_cancel(monkeypat
         assert await cancelled.cancel() == first
 
 
-async def test_runtime_cancel_has_no_normal_capability_query(monkeypatch):
+async def test_runtime_cancel_has_no_normal_feature_query(monkeypatch):
     from wrs_agent.runtime import Runtime
     from wrs_agent.schemas import Plan, TaskCancelRequest, TaskRequest
 
@@ -162,12 +162,15 @@ async def test_runtime_cancel_has_no_normal_capability_query(monkeypatch):
         bindings = stack.system.bindings
         registry = stack.system.registry
         runtime = Runtime(nodes, bindings, registry=registry)
+        # Resolve contracts before making ordinary queries unavailable. Control itself
+        # must use the pinned task/instance and never wait for feature discovery.
+        await stack.system.skills()
 
-        async def unavailable_capabilities():
-            raise AssertionError("control must not wait on ordinary capability queries")
+        async def unavailable_features():
+            raise AssertionError("control must not wait on ordinary feature queries")
 
         for node in nodes.values():
-            monkeypatch.setattr(node, "capabilities", unavailable_capabilities)
+            monkeypatch.setattr(node, "features", unavailable_features)
         try:
             task = await runtime.start(
                 TaskRequest(
@@ -195,10 +198,12 @@ async def test_unready_provider_prevents_partial_task_effects():
             assert health["executions"] == 0
 
 
-async def test_same_async_client_can_cancel_while_waiting_and_planner_is_pending():
-    async with LocalStack(deferred=True, duration=2) as stack:
+async def test_same_async_client_can_cancel_while_waiting_and_planner_is_pending(llm_server):
+    llm_server.gate.clear()
+    async with LocalStack(live_model=True, duration=2) as stack:
         system = stack.system
         await system.goal("put A in B")
+        await eventually(llm_server.entered.is_set, bool)
         await eventually(system.status, lambda state: state["planning"] == "WAITING")
         motion = await system.action("move_named_pose", pose="B")
         speech = await system.action("speak", text="working")
@@ -220,8 +225,8 @@ async def test_same_async_client_can_cancel_while_waiting_and_planner_is_pending
 async def test_configuration_cannot_grant_an_unregistered_node_skill(tmp_path):
     bindings = tmp_path / "bindings.toml"
     source = DEFAULT.read_text(encoding="utf-8")
-    assert 'pick = "wrs"' in source
-    bindings.write_text(source.replace('pick = "wrs"', 'pick = "tts"'), encoding="utf-8")
+    assert "[skills]" not in source
+    bindings.write_text(source + '\n[skills]\npick = "tts"\n', encoding="utf-8")
     async with System.launch(bindings=bindings, duration=0.02) as system:
         nodes = await system.nodes()
         assert nodes["tts"]["skills"] == {"speak": 1}

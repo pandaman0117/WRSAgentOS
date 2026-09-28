@@ -9,7 +9,7 @@ import pytest
 from conftest import eventually, submit_request
 
 from wrs_agent.bindings import load_bindings
-from wrs_agent.nodes.agent import register_runtime
+from wrs_agent.nodes.agent.rpc import register_runtime
 from wrs_agent.planner import ModelPlanner
 from wrs_agent.planner.providers.llm import LLMClient, LLMConfig
 from wrs_agent.processes import LocalStack
@@ -17,7 +17,7 @@ from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import ActionRequest, ControlRequest, new_id
 
 pytestmark = pytest.mark.zenoh
-FIXTURES = Path(__file__).parents[2] / "examples/models/fixtures"
+FIXTURES = Path(__file__).parents[1] / "fixtures/models"
 FIXTURE = FIXTURES / "openai_chat_tool_call.json"
 CONFIG = LLMConfig(model="fixture", base_url="https://model.invalid/v1")
 PROTOCOLS = {
@@ -143,8 +143,8 @@ async def test_pending_model_does_not_block_queries_or_control():
                 )
             ).accepted
             gate.set()
-            await runtime.planning
-            assert runtime.planning_state == "STALE"
+            await runtime.planning.worker
+            assert runtime.planning.state == "STALE"
             assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
                 "executions"
             ] == 1
@@ -205,7 +205,7 @@ async def test_model_failure_keeps_safe_provider_code_in_planning_result():
             from wrs_agent.schemas import GoalRequest
 
             await runtime.goal(GoalRequest(request_id="unauthorized-model", goal="put A in B"))
-            await runtime.planning
+            await runtime.planning.worker
             result = runtime.goal_status("unauthorized-model")
             assert result["state"] == "FAILED"
             assert result["error"]["code"] == "llm_http_401"
@@ -215,3 +215,17 @@ async def test_model_failure_keeps_safe_provider_code_in_planning_result():
         finally:
             await runtime.close()
             await model.aclose()
+
+
+async def test_agent_without_live_opt_in_runs_explicit_tasks_only(llm_server):
+    from wrs_agent import step
+    from wrs_agent.transport import RemoteError
+
+    async with LocalStack(duration=0.02) as stack:
+        system = stack.system
+        with pytest.raises(RemoteError, match="planner_unavailable_or_busy"):
+            await system.goal("put A in B")
+        assert llm_server.requests == []
+        task = await system.start(step("move_named_pose", pose="B"))
+        assert (await task.wait()).state == "SUCCEEDED"
+        assert (await system.status())["planner_calls"] == 0

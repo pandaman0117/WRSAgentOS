@@ -7,7 +7,6 @@ from pathlib import Path
 
 _TOKEN_DIR = Path(__file__).resolve().parents[1] / ".local/example_tokens"
 _STARTERS = {
-    "connect": "examples/connect/01_start_system.py",
     "nodes": "examples/nodes/00_start_router.py 和 01_start_speaker.py",
     "wrs": "examples/wrs/05_start_node.py 或 examples/voice/05_start_wrs_voice.py",
     "tts": "examples/tts/01_start_node.py",

@@ -27,7 +27,7 @@ async def main():
         if result.state != ActionState.SUCCEEDED:
             raise RuntimeError(f"启动播报未完成：{result.state}，{result.reason}")
         robot = await system.snapshot(node="wrs")
-        speaker = await system.clients["tts"].capabilities()
+        speaker = await system.clients["tts"].features()
         # 带历史去重日志重启时准入为 HELD；06 收到明确运动指令后才 allow_actions。
         print("WRS 准入：", robot.admission, flush=True)
         print("播报后端：", speaker.backend, flush=True)

@@ -20,8 +20,9 @@ class TaskHandle:
         self._cancel_id = new_id()
 
     async def status(self):
+        agent = await self._system._resolve("agent")
         return TaskStatus.model_validate(
-            await self._system.agent.request("request/task/status", {"task_id": self.id})
+            await agent.request("request/task/status", {"task_id": self.id})
         )
 
     async def watch(self, *, timeout=10):  # noqa: ASYNC109 - bounded observation
@@ -69,8 +70,9 @@ class GoalHandle:
         self._system, self.request_id = system, request_id
 
     async def status(self):
+        agent = await self._system._resolve("agent")
         status = GoalStatus.model_validate(
-            await self._system.agent.request("request/goal/status", {"request_id": self.request_id})
+            await agent.request("request/goal/status", {"request_id": self.request_id})
         )
         return GoalResult(
             status.request_id,

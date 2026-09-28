@@ -4,10 +4,11 @@ import asyncio
 from pathlib import Path
 
 from examples._session import use_local_token
-from examples.nodes.greet_skill import GREET, register_greet
-from wrs_agent.actions import ActionExecutor
+from examples.nodes.greet_skill import GREET
+from wrs_agent.executor import ActionExecutor
+from wrs_agent.nodes import Node
 from wrs_agent.nodes.serve import serve_node
-from wrs_agent.skills import SpeechState
+from wrs_agent.nodes.tts.backend import SpeechState
 
 DIRECTORY = Path(__file__).resolve().parent
 JOURNAL = DIRECTORY.parents[1] / ".local/state/example-speaker.sqlite3"
@@ -18,9 +19,8 @@ def create_speaker(journal):
         journal,
         state=SpeechState(),
         backend="console_greeting",
-        duration=0,
-        skills={"greet": GREET},
-        capabilities_extra={
+        skills=[GREET],
+        features_extra={
             "robot_controls": False,
             "controller_flush": False,
             "verification": "console_text_complete",
@@ -29,19 +29,22 @@ def create_speaker(journal):
     )
 
 
+class SpeakerNode(Node):
+    async def setup(self):
+        self.actions(create_speaker(self.journal))
+
+
 if __name__ == "__main__":
     use_local_token("nodes", create=True)
-    register_greet()
     try:
         asyncio.run(
             serve_node(
-                "tts",
+                SpeakerNode,
                 node_id="speaker",
                 endpoint="tcp/127.0.0.1:7448",
                 env_id="node-demo",
                 bindings=DIRECTORY / "bindings.toml",
                 journal=JOURNAL,
-                action_factory=create_speaker,
             )
         )
     except KeyboardInterrupt:

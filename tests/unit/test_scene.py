@@ -1,4 +1,5 @@
 import copy
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -104,8 +105,9 @@ def test_scene_parameter_is_explicit_and_only_sent_to_wrs(tmp_path, monkeypatch)
     stack = LocalStack(backend="wrs", scene=path)
     stack.endpoint = "tcp/127.0.0.1:12345"
     command = stack.node_command("wrs")
-    assert command[command.index("--scene") + 1] == str(path.resolve())
-    assert "--scene" not in stack.node_command("agent")
+    assert json.loads(command[command.index("--options") + 1])["scene"] == str(path.resolve())
+    agent = stack.node_command("agent")
+    assert "scene" not in json.loads(agent[agent.index("--options") + 1])
 
 
 def test_sync_launch_forwards_scene_without_starting_hardware(monkeypatch):

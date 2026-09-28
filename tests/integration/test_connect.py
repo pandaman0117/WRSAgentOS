@@ -23,12 +23,12 @@ def test_tts_only_launch_and_another_program_connects(monkeypatch):
         assert set(system.nodes()) == {"tts"}
         assert [skill.name for skill in system.skills()] == ["speak"]
         boot = system.snapshot("tts").boot_id
-        with pytest.raises(ValueError, match="node_role_not_configured"):
+        with pytest.raises(ValueError, match="node_unavailable"):
             system.status()
         with pytest.raises(ValueError, match="robot_allow_actions_unsupported"):
             system.allow_actions("tts")
         result = subprocess.run(
-            python_command("examples/connect/02_client.py"),
+            python_command("tests/fixtures/connect/02_client.py"),
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -80,17 +80,17 @@ async def test_disconnect_keeps_accepted_action_running_and_can_reconcile(
         assert all(p.poll() is None for p in stack.processes)
 
 
-async def test_configured_node_can_join_after_connect_without_rebuilding_client(monkeypatch):
+async def test_unconfigured_node_can_join_after_connect_without_rebuilding_system(monkeypatch):
     monkeypatch.setenv("WRS_AGENT_TOKEN", secrets.token_urlsafe(32))
     async with LocalStack(bindings="configs/robot.toml", duration=0.1) as stack:
         async with System.connect(
-            stack.endpoint, env_id=stack.env_id, bindings="tests/fixtures/actions.toml"
+            stack.endpoint, env_id=stack.env_id
         ) as client:
             initial = await client.nodes()
-            assert initial["wrs"]["ready"] and initial["tts"]["health"] == "offline"
-            with pytest.raises(ValueError, match="node_unavailable"):
-                await client.action("speak", text="offline")
-            tts = client.clients["tts"]
+            assert initial["wrs"]["ready"] and "tts" not in initial
+            with pytest.raises(ValueError, match="provider_not_found"):
+                await client.action("speak", text="not yet discovered")
+            assert "tts" not in client.clients
             worker = stack._spawn(
                 "late-tts",
                 python_command(
@@ -101,8 +101,6 @@ async def test_configured_node_can_join_after_connect_without_rebuilding_client(
                     stack.endpoint,
                     "--env-id",
                     stack.env_id,
-                    "--bindings",
-                    "configs/tts.toml",
                     "--journal",
                     stack.directory / "late-tts.sqlite3",
                     "--duration",
@@ -110,13 +108,16 @@ async def test_configured_node_can_join_after_connect_without_rebuilding_client(
                 ),
             )
             try:
-                await stack._wait_ready(tts.transport, "request/capabilities")
-                await eventually(client.nodes, lambda items: items["tts"]["ready"])
-                assert client.clients["tts"] is tts
+                await stack._wait_ready("tts")
+                await eventually(client.nodes, lambda items: items.get("tts", {}).get("ready"))
+                tts = client.clients["tts"]
                 assert "speak" in {s.name for s in await client.skills()}
+                assert client.clients["tts"] is tts
                 action = await client.action("speak", text="joined later")
                 assert (await action.wait()).state == "SUCCEEDED"
                 assert (await client.snapshot()).data.robot.pose == "home"
             finally:
-                await tts.transport.request("request/tts/shutdown", {}, control=True)
+                await stack.system.registry.transport("tts").request(
+                    "request/node/tts/shutdown", {}, control=True,
+                )
                 await asyncio.to_thread(worker.wait, timeout=3)

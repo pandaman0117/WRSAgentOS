@@ -35,11 +35,11 @@ def test_service_generates_and_client_reuses_private_configuration(monkeypatch, 
 
 def test_example_groups_do_not_share_credentials(monkeypatch, token_dir):
     tokens = set()
-    for group in ("connect", "nodes", "wrs", "tts", "voice"):
+    for group in ("nodes", "wrs", "tts", "voice"):
         monkeypatch.delenv("WRS_AGENT_TOKEN", raising=False)
         _session.use_local_token(group, create=True)
         tokens.add(os.environ["WRS_AGENT_TOKEN"])
-    assert len(tokens) == 5
+    assert len(tokens) == 4
 
 
 def test_explicit_environment_wins_without_reading_or_saving_it(monkeypatch, token_dir, capsys):
@@ -60,7 +60,7 @@ def test_invalid_explicit_token_is_not_replaced(monkeypatch, token_dir, token):
     assert not token_dir.exists()
 
 
-@pytest.mark.parametrize("group", ["connect", "nodes", "wrs", "tts", "voice"])
+@pytest.mark.parametrize("group", ["nodes", "wrs", "tts", "voice"])
 def test_client_first_names_the_service_to_run(token_dir, group):
     with pytest.raises(SystemExit, match="请先运行") as error:
         _session.use_local_token(group)

@@ -18,7 +18,7 @@ from wrs_agent.planner.providers.llm import PROTOCOLS, LLMClient, LLMConfig, LLM
 from wrs_agent.planner.providers.wire import tool_schema
 from wrs_agent.schemas import MAX_BYTES
 
-FIXTURES = Path(__file__).parents[2] / "examples" / "models" / "fixtures"
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "models"
 FIXTURE_FILES = {
     "openai_chat": "openai_chat_tool_call.json",
     "openai_responses": "openai_responses_function_call.json",
@@ -567,17 +567,20 @@ FAULTS = {
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize(
-    "fault", ["two_tools", "wrong_tool", "authority", "cycle", "step_field", "empty"]
+    "fault",
+    ["two_tools", "wrong_tool", "authority", "cycle", "step_field", "empty", "missing_plan"]
 )
 async def test_bad_tool_calls_fail_closed(protocol, fault):
     body = reply_body(protocol)
     inject, field = FAULTS[protocol]
     call = inject(body, fault)
-    invalid_plan = fault in {"authority", "cycle", "step_field"}
+    invalid_plan = fault in {"authority", "cycle", "step_field", "missing_plan"}
     if invalid_plan:
         proposal = call[field] if field == "input" else json.loads(call[field])
         if fault == "authority":
             proposal["control_epoch"] = 999
+        elif fault == "missing_plan":
+            del proposal["plan"]
         elif fault == "cycle":
             proposal["plan"]["steps"][0]["depends_on"] = ["verify"]
         else:

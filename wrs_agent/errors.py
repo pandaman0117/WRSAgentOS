@@ -61,15 +61,23 @@ _MESSAGES = {
     "llm_transport_error": "模型网络传输失败。可运行 scripts/check_llm_connection.py 排查。",
     "llm_timeout": "模型请求超时。请检查网络，或调大 LLM_TIMEOUT_S 后重试。",
     # unordered_resource_conflict 不在这张表里：它的正文要点名是哪两个步骤和哪个资源，
-    # 由 runtime.require_ordered_resources 就地构造，否则这里的通用句会盖掉那些名字。
-    "provider_not_found": "No execution provider is configured for this skill.",
-    "node_unavailable": "The configured node is offline.",
+    # 由 plan_validation.require_ordered_resources 就地构造，否则这里的通用句会盖掉那些名字。
+    "provider_not_found": "No execution provider was discovered or selected for this skill.",
+    "node_unavailable": "The node is unavailable in the current discovery view.",
     "node_not_ready": "The node is present but not ready to accept actions.",
     "node_ambiguous": "More than one startup instance claims this node identity.",
+    "node_endpoint_ambiguous": "Multiple action nodes claim the same service address.",
+    "node_role_ambiguous": "Multiple nodes provide this role; select an explicit peer.",
+    "node_role_mismatch": "The selected peer does not provide the required node role.",
+    "discovery_capacity_exceeded": "The bounded node directory has reached its capacity.",
     "node_instance_changed": "The execution node startup instance changed.",
     "skill_version_mismatch": "The provider does not implement the required skill version.",
     "skill_not_on_node": "The provider does not implement this skill.",
-    "unknown_skill": "This skill has no registered local contract.",
+    "unknown_skill": "This skill is not registered on the execution node.",
+    "skill_provider_ambiguous": (
+        "多个已发现节点提供同名技能，请通过 skill_bindings 明确指定提供者。"
+    ),
+    "skill_catalog_changed": "The skill catalog changed during discovery; query it again.",
     "invalid_arguments": "Arguments do not satisfy the skill contract.",
     "invalid_request": "The message does not satisfy the request contract.",
     "invalid_reply": "The reply does not satisfy the response contract.",

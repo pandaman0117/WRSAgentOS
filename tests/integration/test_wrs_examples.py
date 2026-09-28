@@ -55,9 +55,15 @@ async def test_persistent_wrs_control_and_viewer_do_not_own_remote_execution(mon
             f"tcp/127.0.0.1:{node_port}", env_id=env_id, bindings=tmp_path / "bindings.toml"
         ) as observer:
 
+            # Agent initialization no longer implies WRS initialization has finished.
+            # HELD is initialized too: recovery must remain an explicit client action.
             async def ready():
                 try:
-                    return (await observer.nodes())["agent"]["ready"]
+                    nodes = await observer.nodes()
+                    return (
+                        nodes.get("agent", {}).get("ready")
+                        and nodes.get("wrs", {}).get("health") in {"ready", "held"}
+                    )
                 except TimeoutError:
                     return False
 
@@ -121,7 +127,11 @@ async def test_persistent_wrs_control_and_viewer_do_not_own_remote_execution(mon
         ) as observer:
 
             async def ready_again():
-                return (await observer.nodes())["agent"]["ready"]
+                nodes = await observer.nodes()
+                return (
+                    nodes.get("agent", {}).get("ready")
+                    and nodes.get("wrs", {}).get("health") in {"ready", "held"}
+                )
 
             await eventually(ready_again, bool, timeout=15)
             before = await observer.snapshot()

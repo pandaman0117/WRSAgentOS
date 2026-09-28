@@ -12,14 +12,16 @@ from wrs_agent.schemas import (
     ActionReceipt,
     ActionRequest,
     ActionStatus,
-    CapabilitySnapshot,
     ControlReceipt,
     ControlRequest,
     Empty,
+    FeatureSnapshot,
     IdRequest,
     ModeReceipt,
     ModeRequest,
     NodeSnapshot,
+    SkillCheck,
+    SkillCheckResult,
     new_id,
 )
 
@@ -65,7 +67,8 @@ class ActionHandle:
 
 
 class ActionProvider(Protocol):
-    async def capabilities(self) -> CapabilitySnapshot: ...
+    async def features(self) -> FeatureSnapshot: ...
+    async def validate(self, steps, *, boot_id) -> SkillCheckResult: ...
     async def snapshot(self, *, control: bool = False) -> NodeSnapshot: ...
     async def context(self, *, control: bool = False) -> ActionContext: ...
     async def submit(self, skill, args, *, context, task_id, version=1) -> ActionHandle: ...
@@ -79,7 +82,8 @@ class ActionClient:
         self.transport, self.node_id = transport, node_id
 
     async def _query(
-        self, suffix, payload, response, *, stage, optional=False, control=False, timeout=2.0
+        self, suffix, payload, response, *, stage, optional=False, control=False,
+        timeout=2.0,  # noqa: ASYNC109 - forwards the RPC deadline
     ):
         try:
             raw = await self.transport.request(suffix, payload, control=control, timeout=timeout)
@@ -92,8 +96,17 @@ class ActionClient:
         except ValueError:
             raise AgentError("invalid_reply", node_id=self.node_id, stage=stage) from None
 
-    async def capabilities(self):
-        return await self._query("request/capabilities", {}, CapabilitySnapshot, stage="discovery")
+    async def features(self):
+        return await self._query("request/features", {}, FeatureSnapshot, stage="discovery")
+
+    async def validate(self, steps, *, boot_id):
+        request = SkillCheck(boot_id=boot_id, steps=list(steps))
+        result = await self._query(
+            "request/skills/validate", request.model_dump(), SkillCheckResult, stage="preflight"
+        )
+        if result.boot_id != boot_id or result.count != len(steps):
+            raise AgentError("invalid_reply", node_id=self.node_id, stage="preflight")
+        return result
 
     async def snapshot(self, *, control=False):
         suffix = "request/control/snapshot" if control else "request/snapshot"
@@ -201,9 +214,12 @@ class ActionClient:
 
 
 def register_actions(transport, executor):
-    async def capabilities(payload):
+    async def features(payload):
         Empty.model_validate(payload)
-        return executor.capabilities().model_dump()
+        return executor.features().model_dump()
+
+    async def validate(payload):
+        return executor.validate(SkillCheck.model_validate(payload)).model_dump()
 
     async def snapshot(payload):
         Empty.model_validate(payload)
@@ -232,7 +248,8 @@ def register_actions(transport, executor):
         }
 
     transport.register_handler("request/health", health)
-    transport.register_handler("request/capabilities", capabilities)
+    transport.register_handler("request/features", features)
+    transport.register_handler("request/skills/validate", validate)
     # Observation never grants authority; TTS has no hold/allow_actions service.
     transport.register_handler("request/action/context", context, control=True)
     transport.register_handler("request/snapshot", snapshot)
@@ -241,7 +258,7 @@ def register_actions(transport, executor):
     transport.register_handler("request/action/status", status)
     controls = (
         ("hold", "cancel", "allow_actions")
-        if executor.capabilities().robot_controls
+        if executor.features().robot_controls
         else ("cancel",)
     )
     for kind in controls:

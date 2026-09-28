@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from wrs_agent.nodes.tts import make_mock_tts
+from wrs_agent.nodes.tts.backend import make_mock_tts
 from wrs_agent.schemas import NodeSnapshot, ObjectData, SceneData, SpeechData
 
 

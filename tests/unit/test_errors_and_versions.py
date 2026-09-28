@@ -11,33 +11,36 @@ from test_runtime import OfflineNode, motion
 from wrs_agent import AgentError
 from wrs_agent.bindings import load_bindings
 from wrs_agent.cache import PlanCache
-from wrs_agent.nodes.tts import make_mock_tts
+from wrs_agent.nodes.tts.backend import make_mock_tts
 from wrs_agent.runtime import Runtime
-from wrs_agent.schemas import CapabilitySnapshot, TaskRequest
-from wrs_agent.skills import SKILLS, lookup_skills
+from wrs_agent.schemas import FeatureSnapshot, TaskRequest
+from wrs_agent.skills import lookup_skills
 from wrs_agent.system import step
 
 
 @pytest.mark.parametrize("offer", [["speak"], {"speak": 0}, {"speak": True}, {"speak": "1"}])
-def test_capabilities_require_explicit_positive_integer_versions(offer):
+def test_features_require_explicit_positive_integer_versions(offer):
     with pytest.raises(ValidationError):
-        CapabilitySnapshot(skills=offer)
+        FeatureSnapshot(skills=offer)
 
 
 async def test_version_mismatch_blocks_entire_plan_before_any_branch(make_env, tmp_path):
     robot = make_env()
     tts = make_mock_tts(tmp_path / "tts.db")
     tts.skills["speak"] = replace(
-        SKILLS["speak"], spec=SKILLS["speak"].spec.model_copy(update={"version": 2})
+        tts.skills["speak"], version=2
     )
     runtime = Runtime({"wrs": OfflineNode(robot), "tts": OfflineNode(tts)}, load_bindings()[1])
     try:
-        assert tts.capabilities().skills == {"speak": 2}
+        assert tts.features().skills == {"speak": 2}
         task = await runtime.start(
             TaskRequest(
                 request_id="different-version",
                 plan={
-                    "steps": [step("move_named_pose", pose="B"), step("speak", text="must not run")]
+                    "steps": [
+                        step("move_named_pose", pose="B"),
+                        step("speak", text="must not run").model_copy(update={"version": 1}),
+                    ]
                 },
             )
         )
@@ -159,7 +162,7 @@ async def test_provider_failures_remain_distinguishable(situation, code):
         bus.info = speaker(skills={"speak": 2})
     await view.refresh()
     with pytest.raises(AgentError) as caught:
-        view.node_for("speak")
+        view.node_for("not_advertised" if situation == "unbound" else "speak", 1)
     assert caught.value.code == code
     if situation != "unbound":
         assert caught.value.error.node_id == "speaker"
@@ -178,10 +181,8 @@ def test_version_drift_invalidates_lookup_and_cached_plan():
     assert "pick" not in {s.name for s in lookup_skills(caps, BINDINGS)}
 
 
-def test_step_uses_registered_version_without_changing_the_public_call(monkeypatch):
-    updated = replace(SKILLS["speak"], spec=SKILLS["speak"].spec.model_copy(update={"version": 2}))
-    monkeypatch.setitem(SKILLS, "speak", updated)
-    assert step("speak", text="new contract").version == 2
+def test_step_defers_version_to_the_discovered_provider():
+    assert step("speak", text="new contract").version is None
 
 
 async def test_planning_error_does_not_leak_inputs_through_result_or_cache(make_env):
@@ -196,7 +197,7 @@ async def test_planning_error_does_not_leak_inputs_through_result_or_cache(make_
     runtime = Runtime({"wrs": OfflineNode(env)}, load_bindings()[1], SimpleNamespace(plan=fail))
     try:
         await runtime.goal(GoalRequest(request_id="failed-plan", goal="put A in B"))
-        await runtime.planning
+        await runtime.planning.worker
         result = runtime.goal_status("failed-plan")
         assert result["state"] == "FAILED"
         assert result["error"]["code"] == "internal_error"

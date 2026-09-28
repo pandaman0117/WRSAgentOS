@@ -25,7 +25,7 @@ async def main():
     async with LocalStack(
         backend="wrs", bindings=CONFIG, duration=4.0,
         port=7451, env_id="voice-goal",
-        model_provider="llm", live_model=True,
+        live_model=True,
         tts_backend="qwen", tts_prepared_texts=[GREETING],
         asr_backend="qwen", asr_vocabulary=VOCABULARY,
     ) as stack:

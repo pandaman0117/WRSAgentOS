@@ -18,8 +18,7 @@ allow_hardware = false
 
 [planner]
 backend = "model"
-provider = "mock"  # mock | llm；llm 的协议、端点、模型与凭据只读 LLM_* 环境变量，见 .env.example
-live_model = false
+live_model = false  # true 时使用 LLMClient；协议、端点、模型与凭据只读 LLM_*，见 .env.example
 request_timeout_s = 20.0
 max_model_rounds = 3
 max_plan_steps = 12

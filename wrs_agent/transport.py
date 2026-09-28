@@ -83,6 +83,7 @@ class Transport:
                 "Set WRS_AGENT_TOKEN to a session credential of at least 16 characters"
             )
         self.session = zenoh.open(loopback_config(endpoint))
+        self.endpoint, self.site = endpoint, site
         self.prefix = f"wrs/v4/{site}/{env_id}"
         self.env_id, self.token, self.source = env_id, token, source
         self.session_id = new_id()

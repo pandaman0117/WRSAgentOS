@@ -21,13 +21,13 @@ async def hold(system, script_line):
     return result
 
 
-async def test_transcript_returns_to_the_caller_and_only_the_stop_is_routed():
+async def test_transcript_returns_to_the_caller_and_only_the_stop_is_routed(llm_server):
     async with LocalStack(
-        bindings=BINDINGS, duration=2, asr_script=["put A in B", "停止"]
+        bindings=BINDINGS, live_model=True, duration=2, asr_script=["put A in B", "停止"]
     ) as stack:
         system = stack.system
         assert stack.system.roles["asr"] in (await system.nodes())
-        assert (await system.nodes())[stack.system.roles["asr"]]["capabilities"] == [
+        assert (await system.nodes())[stack.system.roles["asr"]]["features"] == [
             "input.transcribe"
         ]
 

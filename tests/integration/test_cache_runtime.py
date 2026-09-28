@@ -12,7 +12,7 @@ from wrs_agent.runtime import Runtime
 from wrs_agent.schemas import GoalRequest, new_id
 
 pytestmark = pytest.mark.zenoh
-FIXTURE = Path(__file__).parents[2] / "examples/models/fixtures/openai_chat_tool_call.json"
+FIXTURE = Path(__file__).parents[1] / "fixtures/models/openai_chat_tool_call.json"
 CONFIG = LLMConfig(model="fixture", base_url="https://model.invalid/v1")
 
 
@@ -36,9 +36,9 @@ async def test_verified_cache_hits_have_new_ids_and_failures_are_not_cached(faul
         try:
             for _ in range(3):
                 await runtime.goal(GoalRequest(request_id=new_id(), goal="put A in B"))
-                await runtime.planning
+                await runtime.planning.worker
             if fault is None:
-                assert runtime.state == "SUCCEEDED"
+                assert runtime.execution.state == "SUCCEEDED"
                 assert runtime.cache.last_hit and runtime.cache.hits == 1
                 assert runtime.planner_calls == len(calls) == 2
                 planning = runtime.snapshot()["last_planning"]
@@ -49,7 +49,7 @@ async def test_verified_cache_hits_have_new_ids_and_failures_are_not_cached(faul
                     "executions"
                 ] == 12
             else:
-                assert runtime.state == "FAILED"
+                assert runtime.execution.state == "FAILED"
                 assert len(calls) == 3 and not runtime.cache.entries
                 assert runtime.cache.hits == 0
         finally:
