@@ -268,6 +268,29 @@ class SpeechData(Boundary):
     last_text: str = Field(default="", max_length=512)
 
 
+class VisionItem(Boundary):
+    """One detection box or one grasp candidate. Coordinates stay in the input frame."""
+
+    label: str = Field(min_length=1, max_length=64)
+    score: float = Field(ge=0, le=1)
+    xyxy: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    translation: list[float] | None = Field(default=None, min_length=3, max_length=3)
+    rotation: list[float] | None = Field(default=None, min_length=9, max_length=9)
+    width: float | None = Field(default=None, ge=0, le=1)
+
+
+class VisionData(Boundary):
+    """Latest vision result summary. Images, masks, and clouds stay in files."""
+
+    kind: Literal["vision"] = "vision"
+    completed: Counter = 0
+    task: Literal["", "detect", "segment", "infer_grasps"] = ""
+    source: str = Field(default="", max_length=240)
+    summary: str = Field(default="", max_length=240)
+    result_path: str = Field(default="", max_length=240)
+    items: list[VisionItem] = Field(default_factory=list, max_length=8)
+
+
 class NodeSnapshot(Boundary):
     """One execution node at capture time; never an atomic whole-system view or grant."""
 
@@ -279,7 +302,7 @@ class NodeSnapshot(Boundary):
     admission: Literal["OPEN", "HELD", "UNKNOWN"]
     active_action: Name | None
     stop_confirmed: bool
-    data: Annotated[SceneData | SpeechData, Field(discriminator="kind")]
+    data: Annotated[SceneData | SpeechData | VisionData, Field(discriminator="kind")]
 
 
 class ActionContext(NodeSnapshot):
